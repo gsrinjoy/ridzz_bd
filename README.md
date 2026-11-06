@@ -2,6 +2,8 @@
 
 Group voice and live tracking for motorcycle rides, for up to 10 riders. One codebase runs as a web app and as an Android APK. Everything runs on free tiers.
 
+**Live at https://ridzz.ridzz.workers.dev** (owner portal at `/admin`).
+
 See [docs/PLAN.md](docs/PLAN.md) for the features, design decisions, measured results, known limits, and roadmap.
 
 ## Run it locally
@@ -25,7 +27,7 @@ pnpm exec wrangler secret put ADMIN_TOKEN    # your password for /admin
 pnpm run deploy
 ```
 
-The app is then live at `https://slipstream.<your-subdomain>.workers.dev`, and the owner portal at `/admin`.
+The app is then live at `https://ridzz.<your-subdomain>.workers.dev`, and the owner portal at `/admin`.
 
 ### Optional keys
 
@@ -43,7 +45,7 @@ Needs JDK 21 and the Android SDK (platform 36), both free.
 
 ```sh
 pnpm build
-APP_URL=https://slipstream.<your-subdomain>.workers.dev pnpm exec cap sync android
+APP_URL=https://ridzz.<your-subdomain>.workers.dev pnpm exec cap sync android
 cd android && ./gradlew assembleDebug
 ```
 
@@ -58,6 +60,7 @@ The APK is at `android/app/build/outputs/apk/debug/app-debug.apk`. It loads the 
 | `node tests/e2e/webkit.mjs <outDir>` | The Safari engine at iPhone size, including the voice pipeline |
 | `node tests/e2e/ui-audit.mjs <outDir>` | Every rider screen at four phone sizes, for layout faults |
 | `node tests/e2e/android.mjs` | The real APK on a booted emulator; needs an APK built with `APP_URL=http://localhost:8792` |
+| `OWNER=<password> node tests/e2e/live.mjs <url>` | A deployed site, end to end; removes its own test data |
 
 ## Layout
 

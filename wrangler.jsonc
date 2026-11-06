@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "slipstream",
+  "name": "ridzz",
   "main": "src/server/index.ts",
   "compatibility_date": "2026-10-01",
   "assets": {

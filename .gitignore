@@ -6,3 +6,4 @@ dist
 android/app/build
 android/.gradle
 android/build
+releases
