@@ -1,0 +1,271 @@
+import { useEffect, useRef, useState } from 'preact/hooks';
+import { distanceM, formatDistance, type LatLng } from '../../../shared/geo';
+import { directionsUrl, extractLink, isShortMapsLink, parseMapsLink, routeUrl } from '../../../shared/mapsLink';
+import type { PlaceHit, Stop, StopKind } from '../../../shared/protocol';
+import { send } from '../../app/session';
+import { droppedPin, isIos, myPosition, pendingShare, ride, route, selectedStopId, stops } from '../../app/store';
+import { ArrowDown, ArrowUp, Navigate, Trash } from '../../ui/icons';
+import { resolveLink, searchPlaces } from '../ride/api';
+
+const KINDS: { kind: StopKind; label: string }[] = [
+  { kind: 'start', label: 'Start' },
+  { kind: 'fuel', label: 'Fuel' },
+  { kind: 'food', label: 'Food' },
+  { kind: 'rest', label: 'Rest' },
+  { kind: 'view', label: 'Viewpoint' },
+  { kind: 'regroup', label: 'Regroup' },
+  { kind: 'finish', label: 'Finish' },
+];
+
+const kindLabel = (kind: StopKind) => KINDS.find((k) => k.kind === kind)?.label ?? 'Stop';
+const looksLikeLink = (t: string) => !!extractLink(t) || !!parseMapsLink(t);
+
+const hoursMinutes = (s: number) => {
+  const h = Math.floor(s / 3600);
+  const m = Math.round((s % 3600) / 60);
+  return h ? `${h}h ${m}m` : `${m} min`;
+};
+
+/** datetime-local works in local time, while the ride stores epoch ms. */
+function toLocalInput(ms?: number): string {
+  if (!ms) return '';
+  const d = new Date(ms);
+  return new Date(ms - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+const NAME_SAVE_MS = 700;
+
+function RideDetails() {
+  const info = ride.value;
+  const [name, setName] = useState(info?.name ?? '');
+  const typing = useRef(false);
+  const saving = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Someone else renaming the ride must not overwrite what this rider is typing.
+  useEffect(() => {
+    if (!typing.current) setName(info?.name ?? '');
+  }, [info?.name]);
+
+  function edit(value: string) {
+    setName(value);
+    typing.current = true;
+    clearTimeout(saving.current);
+    // Saved as they type: on a phone, leaving a field does not reliably fire blur.
+    saving.current = setTimeout(() => {
+      typing.current = false;
+      if (value.trim()) send({ t: 'ride.update', name: value });
+    }, NAME_SAVE_MS);
+  }
+
+  return (
+    <div class="plan-head">
+      <input
+        class="field plan-name"
+        value={name}
+        maxLength={40}
+        aria-label="Ride name"
+        placeholder="Name this ride"
+        onInput={(e) => edit(e.currentTarget.value)}
+      />
+      <div class="plan-when">
+        <label class="label" for="meet">Meet</label>
+        <input
+          id="meet"
+          class="field"
+          type="datetime-local"
+          value={toLocalInput(info?.startsAt)}
+          onChange={(e) => {
+            const v = e.currentTarget.value;
+            send({ t: 'ride.update', startsAt: v ? new Date(v).getTime() : null });
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function Summary() {
+  const r = route.value;
+  const count = stops.value.length;
+  if (count < 2) return null;
+  return (
+    <div class="plan-sum">
+      <div><span class="label">Total</span><b class="num">{r ? formatDistance(r.distanceM) : '…'}</b></div>
+      <div><span class="label">Riding</span><b class="num">{r ? hoursMinutes(r.durationS) : '…'}</b></div>
+      <div><span class="label">Stops</span><b class="num">{count}</b></div>
+    </div>
+  );
+}
+
+function StopItem({ stop, index, total }: { stop: Stop; index: number; total: number }) {
+  const open = selectedStopId.value === stop.id;
+  const here = myPosition.value;
+  const leg = index > 0 ? route.value?.legs[index - 1] : undefined;
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) ref.current?.scrollIntoView({ block: 'nearest' });
+  }, [open]);
+
+  function move(by: number) {
+    const ids = stops.value.map((s) => s.id);
+    ids.splice(index, 1);
+    ids.splice(index + by, 0, stop.id);
+    send({ t: 'stop.order', ids });
+  }
+
+  return (
+    <div ref={ref} class={`stop ${open ? 'open' : ''}`}>
+      <button class="stop-row" aria-expanded={open} onClick={() => (selectedStopId.value = open ? null : stop.id)}>
+        <span class="stop-index num">{index + 1}</span>
+        <span class="row-main">
+          <div class="row-title">{stop.name}</div>
+          <div class="row-sub">{kindLabel(stop.kind)}{here ? ` · ${formatDistance(distanceM(here, stop))} from you` : ''}</div>
+        </span>
+        {leg && <span class="leg num">+{formatDistance(leg.distanceM)}</span>}
+      </button>
+      {open && (
+        <div class="stop-tools">
+          <a class="btn primary block" href={directionsUrl(stop)} target="_blank" rel="noopener">
+            <Navigate /> Get directions
+          </a>
+          {isIos() && <span class="note">Voice pauses while you are out of this app.</span>}
+          <div class="stop-moves">
+            <button class="icon-btn" aria-label={`Move ${stop.name} earlier`} disabled={index === 0} onClick={() => move(-1)}><ArrowUp /></button>
+            <button class="icon-btn" aria-label={`Move ${stop.name} later`} disabled={index === total - 1} onClick={() => move(1)}><ArrowDown /></button>
+            <button class="icon-btn" aria-label={`Remove ${stop.name}`} onClick={() => send({ t: 'stop.remove', id: stop.id })}><Trash /></button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function PlanPanel() {
+  const [query, setQuery] = useState(pendingShare.value ?? '');
+  const [hits, setHits] = useState<PlaceHit[]>([]);
+  const [kind, setKind] = useState<StopKind>(stops.value.length ? 'fuel' : 'start');
+  const [message, setMessage] = useState('');
+  const seq = useRef(0);
+  const here = myPosition.value;
+  const pin = droppedPin.value;
+
+  function add(name: string, at: LatLng) {
+    send({ t: 'stop.add', stop: { name, la: at.la, lo: at.lo, kind } });
+    setQuery('');
+    setHits([]);
+    setMessage('');
+    pendingShare.value = null;
+    droppedPin.value = null;
+    if (kind === 'start') setKind('fuel');
+  }
+
+  async function addFromLink(text: string) {
+    setMessage('Reading link…');
+    const first = text.split('\n')[0]?.trim();
+    const link = extractLink(text);
+    try {
+      const direct = parseMapsLink(text);
+      const place = link && (isShortMapsLink(link) || direct?.la === undefined) ? await resolveLink(link) : direct;
+      if (place?.la === undefined || place.lo === undefined) throw new Error('No location found in that link');
+      const fallback = first && !first.startsWith('http') ? first : 'Shared place';
+      add(place.name ?? fallback, { la: place.la, lo: place.lo });
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Could not read that link');
+    }
+  }
+
+  useEffect(() => {
+    const q = query.trim();
+    const id = ++seq.current;
+    if (q.length < 3 || looksLikeLink(q)) {
+      setHits([]);
+      return;
+    }
+    setMessage('Searching…');
+    const timer = setTimeout(() => {
+      searchPlaces(q, here)
+        .then((found) => {
+          if (id !== seq.current) return;
+          setHits(found);
+          setMessage(found.length ? '' : 'No places found. Try another name, or long-press the map.');
+        })
+        .catch(() => setMessage('Search is unavailable. Long-press the map instead.'));
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  useEffect(() => {
+    if (pendingShare.value) void addFromLink(pendingShare.value);
+  }, []);
+
+  const list = stops.value;
+  const whole = list.length > 1 ? routeUrl(list) : undefined;
+  const first = list[0];
+
+  return (
+    <>
+      <RideDetails />
+      <Summary />
+
+      <div class="kinds" role="group" aria-label="Type of stop to add">
+        {KINDS.map((k) => (
+          <button key={k.kind} class="kind" aria-pressed={k.kind === kind} onClick={() => setKind(k.kind)}>{k.label}</button>
+        ))}
+      </div>
+
+      {pin ? (
+        <div class="detail">
+          <span class="note">Add a {kindLabel(kind).toLowerCase()} stop at the pin?</span>
+          <button class="btn primary block" onClick={() => add(kindLabel(kind), pin)}>Add stop here</button>
+          <button class="btn block" onClick={() => (droppedPin.value = null)}>Cancel</button>
+        </div>
+      ) : (
+        <input
+          class="field"
+          type="search"
+          value={query}
+          placeholder="Search places, or paste a Google Maps link"
+          aria-label="Search for a stop"
+          onInput={(e) => {
+            const v = e.currentTarget.value;
+            setQuery(v);
+            setMessage('');
+            if (looksLikeLink(v)) void addFromLink(v);
+          }}
+        />
+      )}
+      {message && <span class="note" role="status">{message}</span>}
+
+      {hits.length > 0 && (
+        <div class="hits">
+          {hits.map((h) => (
+            <button key={`${h.la},${h.lo}`} class="row" onClick={() => add(h.name, h)}>
+              <span class="row-main">
+                <div class="row-title">{h.name}</div>
+                <div class="row-sub">{h.detail}</div>
+              </span>
+              <span class="row-end num">{here ? formatDistance(distanceM(here, h)) : ''}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {list.length > 0 && (
+        <div class="timeline">
+          {list.map((s, i) => <StopItem key={s.id} stop={s} index={i} total={list.length} />)}
+        </div>
+      )}
+
+      {!list.length && !hits.length && !pin && (
+        <p class="note">Search for where the ride starts, then add fuel, food and the finish. Long-pressing the map works too. Everyone on the ride sees the plan the moment you change it.</p>
+      )}
+
+      {first && (
+        <a class="btn primary block" href={whole ?? directionsUrl(first)} target="_blank" rel="noopener">
+          <Navigate /> {whole ? 'Start navigation' : `Navigate to ${first.name}`}
+        </a>
+      )}
+    </>
+  );
+}

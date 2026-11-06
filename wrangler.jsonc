@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "slipstream",
+  "main": "src/server/index.ts",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*"]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "RIDES", "class_name": "RideRoom" },
+      { "name": "DIRECTORY", "class_name": "Directory" }
+    ]
+  },
+  // SQLite-backed Durable Objects are the kind available on the Workers Free plan.
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RideRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["Directory"] }
+  ]
+}
