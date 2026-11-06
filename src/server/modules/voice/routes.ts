@@ -1,5 +1,6 @@
 import type { RTCIceServerLike, VoiceConfig } from '../../../shared/protocol';
 import { fail, json, type Env } from '../../env';
+import { directory } from '../directory/Directory';
 import { authorised } from '../rides/routes';
 
 const REALTIME = 'https://rtc.live.cloudflare.com/v1';
@@ -39,7 +40,8 @@ export async function voiceRoutes(request: Request, env: Env, path: string[]): P
     return fail(401, 'Not on this ride');
   }
 
-  const sfuReady = !!env.SFU_APP_ID && !!env.SFU_APP_SECRET;
+  // Past the lock line, voice uses direct links, so relay data can never run into charges.
+  const sfuReady = !!env.SFU_APP_ID && !!env.SFU_APP_SECRET && !(await directory(env).isLocked('relay_gb'));
   if (action === 'config') {
     return json({ mode: sfuReady ? 'sfu' : 'mesh', iceServers: await iceServers(env) } satisfies VoiceConfig);
   }

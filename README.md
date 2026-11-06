@@ -29,6 +29,8 @@ pnpm run deploy
 
 The app is then live at `https://ridzz.<your-subdomain>.workers.dev`, and the owner portal at `/admin`.
 
+New accounts cannot do anything until you approve them in the portal. To change the portal password, run `pnpm exec wrangler secret put ADMIN_TOKEN`.
+
 ### Optional keys
 
 Each one is a Worker secret, set with `wrangler secret put <NAME>`. The app works without them, with the fallback shown.
@@ -65,6 +67,7 @@ For a release build to share, run `./gradlew assembleRelease`. It signs with the
 | `node tests/e2e/nearby-voice.mjs` | The local voice path on real WebCodecs |
 | `node tests/e2e/android.mjs` | The real APK on a booted emulator; needs an APK built with `APP_URL=http://localhost:8792` |
 | `OWNER=<password> node tests/e2e/live.mjs <url>` | A deployed site, end to end; removes its own test data |
+| `OWNER=<password> node tests/e2e/live-call.mjs <url> <outDir>` | A real call through the real voice relay and map |
 
 ## Layout
 

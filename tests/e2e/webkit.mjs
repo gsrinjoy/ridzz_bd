@@ -15,13 +15,24 @@ const check = (ok, label, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  (${detail})` : ''}`);
   if (!ok) failures++;
 };
+const approve = async (base, email) => {
+  const headers = { authorization: 'Bearer local-admin-only', 'content-type': 'application/json' };
+  const users = await fetch(`${base}/api/admin/users`, { headers }).then((r) => r.json());
+  const user = users.find((u) => u.email === email);
+  await fetch(`${base}/api/admin/users/${user.id}/approve`, { method: 'POST', headers, body: '{}' });
+};
+
 const signUp = async (page, name) => {
+  const email = `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`;
   await page.click('text=Create an account');
   await page.fill('#name', name);
-  await page.fill('#email', `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`);
+  await page.fill('#email', email);
   await page.fill('#password', 'test-password-1');
   await page.click('button:has-text("Create account")');
   await page.click('text=I saved it');
+  await page.waitForSelector('text=Waiting for approval');
+  await approve(BASE, email);
+  await page.click('text=Check again');
   await page.waitForSelector('#code');
 };
 

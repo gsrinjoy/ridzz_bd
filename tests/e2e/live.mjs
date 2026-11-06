@@ -33,6 +33,7 @@ check((await api('/api/route?coords=77.59,12.97;77.68,13.37')).status === 401, '
 check((await api('/api/rides', { method: 'POST', body: {} })).status === 401, 'creating a ride needs a signed-in rider');
 check((await api('/api/rides/ABC234/join', { method: 'POST', body: {} })).status === 401, 'joining a ride needs a signed-in rider');
 check((await api('/api/friends')).status === 401, 'friends need a signed-in rider');
+check((await api('/api/config')).status === 401, 'the map key is not public');
 check((await api('/api/stats')).status === 401, 'stats need a signed-in rider');
 check((await api('/api/friends', { headers: { authorization: 'Bearer forged-token' } })).status === 401, 'a forged session is refused');
 
@@ -40,6 +41,7 @@ check((await api('/api/admin/overview')).status === 401, 'the owner API refuses 
 check((await api('/api/admin/overview', { headers: { authorization: 'Bearer wrong' } })).status === 401, 'the owner API refuses a wrong password');
 const over = await api('/api/admin/overview', { headers: owner });
 check(over.status === 200, 'the owner API accepts the owner password', JSON.stringify(over.data?.services));
+check(over.data?.budgets?.length === 7, 'the free limit meters are live', over.data?.budgets?.map((b) => `${b.metric}:${Math.round(b.used)}`).join(' '));
 
 const emailA = email('a');
 const weak = await api('/api/auth/register', { method: 'POST', body: { name: 'X', email: email('w'), password: 'short' } });
@@ -47,7 +49,13 @@ check(weak.status === 400, 'a weak password is refused', weak.data?.error);
 const madeA = await api('/api/auth/register', { method: 'POST', body: { name: 'LiveTest A', email: emailA, password: 'live-password-1' } });
 check(madeA.status === 200 && !!madeA.data?.recoveryCode, 'an account can be registered', `HTTP ${madeA.status}`);
 const a = madeA.data?.account;
+check(a?.approved === false, 'a new account starts unapproved');
+check((await api('/api/rides', { method: 'POST', headers: as(a), body: {} })).status === 403, 'an unapproved account cannot create a ride');
+check((await api('/api/friends', { headers: as(a) })).status === 403, 'an unapproved account cannot use the API');
+check((await api('/api/auth/me', { headers: as(a) })).data?.approved === false, 'an unapproved account can check its status');
 const b = (await api('/api/auth/register', { method: 'POST', body: { name: 'LiveTest B', email: email('b'), password: 'live-password-2' } })).data?.account;
+for (const u of [a, b]) await api(`/api/admin/users/${u.userId}/approve`, { method: 'POST', headers: owner, body: {} });
+check((await api('/api/friends', { headers: as(a) })).status === 200, 'once approved, the account works');
 check((await api('/api/auth/register', { method: 'POST', body: { name: 'Y', email: emailA, password: 'live-password-3' } })).status === 409, 'an email cannot register twice');
 check((await api('/api/auth/login', { method: 'POST', body: { email: emailA, password: 'nope-nope-nope' } })).status === 401, 'a wrong password is refused');
 const signedIn = await api('/api/auth/login', { method: 'POST', body: { email: emailA, password: 'live-password-1' } });

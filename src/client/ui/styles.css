@@ -220,6 +220,18 @@ input[type='checkbox'] { width: 24px; height: 24px; accent-color: var(--accent);
 .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 60px; }
 .admin-actions .btn { min-height: 40px; padding: 0 12px; font-size: 14px; }
 
+/* Free limits */
+.limits { gap: 10px; }
+.limit { display: grid; gap: 5px; padding: 2px 10px; }
+.limit-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 14px; font-weight: 600; }
+.limit-track { height: 10px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.limit-track i { display: block; height: 100%; border-radius: 4px; background: var(--live); }
+.limit-track i.warning { background: var(--warn); }
+.limit-track i.critical, .limit-track i.locked { background: var(--danger); }
+.limit-alert { margin: 0 10px; padding: 10px 12px; border-radius: 10px; font-size: 14px; background: #2b2410; color: #ffe08a; }
+.limit-alert.critical, .limit-alert.locked { background: #3a1214; color: #ffb4b4; }
+.pending-banner { margin: 0; padding: 12px 14px; border-radius: 12px; background: #2b2410; color: #ffe08a; }
+
 /* Ride lifecycle */
 .start-bar { padding: 14px 12px 0; }
 .start-bar.waiting { padding: 14px 16px 2px; color: var(--muted); font-size: 14px; font-weight: 600; text-align: center; }

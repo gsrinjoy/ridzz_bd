@@ -1,5 +1,5 @@
 import { render } from 'preact';
-import { AuthScreen } from './app/AuthScreen';
+import { AuthScreen, PendingScreen } from './app/AuthScreen';
 import { Home } from './app/Home';
 import { RideScreen } from './app/RideScreen';
 import { connect } from './app/session';
@@ -8,6 +8,7 @@ import './ui/styles.css';
 
 function App({ invite }: { invite: string | null }) {
   if (!account.value) return <AuthScreen />;
+  if (!account.value.approved) return <PendingScreen />;
   return session.value ? <RideScreen /> : <Home invite={invite} />;
 }
 
@@ -31,7 +32,7 @@ function start() {
     history.replaceState(null, '', '/');
   }
 
-  if (session.value && account.value) connect(session.value);
+  if (session.value && account.value?.approved) connect(session.value);
   render(<App invite={invite} />, root);
 
   if ('serviceWorker' in navigator && import.meta.env.PROD) {

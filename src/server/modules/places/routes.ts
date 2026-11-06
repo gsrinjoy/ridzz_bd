@@ -3,6 +3,7 @@ import { MAPS_LINK_HOSTS, parseMapsLink } from '../../../shared/mapsLink';
 import type { PlaceHit, RouteResult } from '../../../shared/protocol';
 import { fail, json, type Env } from '../../env';
 import { currentUser } from '../auth/routes';
+import { directory } from '../directory/Directory';
 import { googleSearch } from './google';
 
 const UA = { 'user-agent': 'Slipstream/0.1 (private group-ride app)' };
@@ -104,7 +105,12 @@ export async function placesRoutes(request: Request, env: Env, path: string[]): 
   const user = await currentUser(request, env);
   if (user instanceof Response) return user;
   const params = new URL(request.url).searchParams;
-  if (resource === 'route') return route(params.get('coords') ?? '');
+  const dir = directory(env);
+  if (resource === 'route') {
+    if (await dir.isLocked('routing')) return fail(429, 'Routing is paused until tomorrow');
+    await dir.addUsage({ routing: 1 });
+    return route(params.get('coords') ?? '');
+  }
   if (resource !== 'places') return undefined;
   if (action === 'search') {
     const q = (params.get('q') ?? '').trim().slice(0, 120);
@@ -112,14 +118,18 @@ export async function placesRoutes(request: Request, env: Env, path: string[]): 
     const lat = params.get('lat');
     const lon = params.get('lon');
     const near = lat && lon ? { lat, lon } : undefined;
-    if (env.GOOGLE_PLACES_KEY) {
+    if (env.GOOGLE_PLACES_KEY && !(await dir.isLocked('google_search'))) {
       try {
         const point = near ? { la: Number(near.lat), lo: Number(near.lon) } : undefined;
-        return json(await googleSearch(q, point, env.GOOGLE_PLACES_KEY));
+        const hits = await googleSearch(q, point, env.GOOGLE_PLACES_KEY);
+        await dir.addUsage({ google_search: 1 });
+        return json(hits);
       } catch {
         // Out of quota or a bad key: free search is better than none.
       }
     }
+    if (await dir.isLocked('place_search')) return fail(429, 'Search is paused until tomorrow');
+    await dir.addUsage({ place_search: 1 });
     return json(await geocode(q, near), 200, { 'cache-control': DAY });
   }
   if (action === 'resolve') return resolve(params.get('url') ?? '');

@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { AdminUser, FriendInfo, FriendRequest, FriendsView, RideInvite } from '../../../shared/protocol';
+import { BUDGETS, budgetState, periodKey, type BudgetView } from '../../../shared/budgets';
 import type { RideLog, RideSummary } from '../../../shared/stats';
 import type { Env } from '../../env';
 import { digest, DUMMY_HASH_INPUT, hashSecret, newRecoveryCode, newSessionToken, normaliseCode, verifySecret } from '../auth/passwords';
@@ -13,6 +14,7 @@ export type UserRow = {
   created_at: number;
   last_seen: number;
   blocked: number;
+  approved: number;
 };
 
 type CredentialRow = {
@@ -55,7 +57,17 @@ export class Directory extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS invites (id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, code TEXT NOT NULL, UNIQUE (to_id, code));
       CREATE TABLE IF NOT EXISTS ride_logs (user_id TEXT NOT NULL, id TEXT NOT NULL, date TEXT NOT NULL, summary TEXT NOT NULL, detail TEXT NOT NULL, PRIMARY KEY (user_id, id));
       CREATE TABLE IF NOT EXISTS rides (code TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT NOT NULL, created_at INTEGER NOT NULL, last_active INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS usage (period TEXT NOT NULL, metric TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (period, metric));
     `);
+    this.migrate();
+  }
+
+  /** Accounts from before approval existed keep working, so nobody is locked out by the upgrade. */
+  private migrate(): void {
+    const columns = this.sql.exec<{ name: string }>('PRAGMA table_info(users)').toArray().map((c) => c.name);
+    if (columns.includes('approved')) return;
+    this.sql.exec('ALTER TABLE users ADD COLUMN approved INTEGER NOT NULL DEFAULT 0');
+    this.sql.exec('UPDATE users SET approved = 1');
   }
 
   private user(id: string): UserRow | undefined {
@@ -86,6 +98,15 @@ export class Directory extends DurableObject<Env> {
 
   private endSessions(userId: string): void {
     this.sql.exec('DELETE FROM sessions WHERE user_id = ?', userId);
+  }
+
+  /** Strangers can ask, but they cannot fill the database by asking. */
+  pendingCount(): number {
+    return this.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM users WHERE approved = 0').one().n;
+  }
+
+  approve(id: string): void {
+    this.sql.exec('UPDATE users SET approved = 1 WHERE id = ?', id);
   }
 
   async register(name: string, color: string, email: string, password: string): Promise<{ user: UserRow; token: string; recoveryCode: string } | null> {
@@ -177,6 +198,29 @@ export class Directory extends DurableObject<Env> {
 
   getUser(id: string): UserRow | undefined {
     return this.user(id);
+  }
+
+  addUsage(amounts: Record<string, number>): void {
+    const now = Date.now();
+    for (const [metric, amount] of Object.entries(amounts)) {
+      const budget = BUDGETS.find((b) => b.metric === metric);
+      if (!budget || !amount) continue;
+      const period = periodKey(budget.period, now);
+      this.sql.exec('INSERT INTO usage VALUES (?, ?, ?) ON CONFLICT (period, metric) DO UPDATE SET value = value + excluded.value', period, metric, amount);
+    }
+  }
+
+  budgets(): BudgetView[] {
+    const now = Date.now();
+    return BUDGETS.map((budget) => {
+      const row = this.sql.exec<{ value: number }>('SELECT value FROM usage WHERE period = ? AND metric = ?', periodKey(budget.period, now), budget.metric).toArray()[0];
+      const used = row?.value ?? 0;
+      return { ...budget, used, state: budgetState(budget, used) };
+    });
+  }
+
+  isLocked(metric: string): boolean {
+    return this.budgets().some((b) => b.metric === metric && b.state === 'locked');
   }
 
   updateUser(id: string, name: string, color: string): void {
@@ -294,7 +338,7 @@ export class Directory extends DurableObject<Env> {
     return this.sql
       .exec<UserRow & { friends: number; logs: number; email: string | null }>('SELECT u.*, c.email, (SELECT COUNT(*) FROM friendships f WHERE f.a = u.id OR f.b = u.id) AS friends, (SELECT COUNT(*) FROM ride_logs l WHERE l.user_id = u.id) AS logs FROM users u LEFT JOIN credentials c ON c.user_id = u.id ORDER BY u.last_seen DESC')
       .toArray()
-      .map((u) => ({ ...toFriend(u), email: u.email ?? '', createdAt: u.created_at, lastSeen: u.last_seen, blocked: !!u.blocked, friends: u.friends, ridesLogged: u.logs }));
+      .map((u) => ({ ...toFriend(u), email: u.email ?? '', createdAt: u.created_at, lastSeen: u.last_seen, blocked: !!u.blocked, approved: !!u.approved, friends: u.friends, ridesLogged: u.logs }));
   }
 
   counts(): { friendships: number } {

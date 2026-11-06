@@ -7,7 +7,8 @@ Group intercom and ride tracking for up to 10 riders. Android riders install a s
 | Area | Features |
 |---|---|
 | **Ride lifecycle** | Planning, then Start ride for the whole group, then End ride with a summary for everyone. The server owns the phase |
-| **Accounts and security** | Email and password, hashed with PBKDF2. Revocable sessions, lockout, recovery code, owner reset, security headers, rate limits |
+| **Accounts and security** | Private: the owner approves every account. Email and password, hashed with PBKDF2. Revocable sessions, lockout, recovery code, owner reset, security headers, rate limits |
+| **Free limit guard** | Seven usage meters in the owner portal. Warns at 70%, and at 95% locks the feature, so anything billable stops before it costs money |
 | **Voice** | Group call, auto-talk, hold-to-talk, open mic, mute, wind and road noise reduction with Light, Balanced and Strong settings, self-healing links |
 | **Nearby (Android)** | Phone-to-phone voice, location and alerts over Google Nearby Connections when the internet drops, relayed across up to 3 hops |
 | **Call deck** | Participants, timer, link quality, mute, speaker and mic selection, speaker test, end call, per-rider volume, mute a rider for yourself only |
@@ -104,15 +105,16 @@ The raw mic scores better with Whisper in every row, and that needs reading care
 - **Bluetooth helmets.** Routing is built, but the emulator has no Bluetooth. On the emulator the capture source was `CAMCORDER`, which on some phones may bypass a Bluetooth mic. Needs a real phone and intercom.
 - **Battery.** Not measured. An emulator cannot give meaningful numbers, so this needs a real ride.
 - **Horns.** They are loud and tonal, so a horn can open the mic for about a second.
-- **Cloudflare voice relay.** The relay code follows the docs and has unit tests, but it has never run against the real service, because that needs keys only the owner can create. Until they are set, voice uses direct links, which can fail on cellular networks. See the README.
+- **Cloudflare voice relay.** Proven on the live site from a fixed connection: 39 ms to the relay, with real audio received. Moving between cell towers at speed still needs a real ride.
+- **Free limit meters are estimates.** They come from the app's own counters, not from Cloudflare's billing. The Cloudflare dashboard has the exact figures.
 - **Nearby.** It starts on real Google Play services and its voice path is tested, but the radio link itself needs two real Android phones. Audio and alerts over it are unproven in the field.
 - **Password recovery.** There is no email reset, because free sending services typically need a card. Losing both the password and the recovery code means asking the owner for a reset. Email addresses are not verified.
-- **Mappls.** Mappls publishes no free quota, and its terms allow removing free access after 3 months unused. The adapter follows Mappls' SDK docs and has unit tests, but it has never run with a real key. If it fails, the app switches to the backup map by itself. Ola Maps is the next choice if Mappls proves awkward: 100,000 free map loads a month, published, and no credit balance needed within that.
+- **Mappls.** Mappls publishes no free quota, and its terms allow removing free access after 3 months unused. The key is valid, but Mappls answers `ASSET_ACCESS_DENIED` until Map SDK access is enabled for the app, so the adapter has not yet drawn a real Mappls map. Until then the app uses the backup map by itself. Ola Maps is the next choice if Mappls proves awkward: 100,000 free map loads a month, published, and no credit balance needed within that.
 - **Planning is open.** Anyone on a ride can edit the plan, which suits a group of friends.
 
 ## Next
 
-1. **Keys.** Mappls, Cloudflare voice relay and TURN, then test each live.
+1. **Mappls access.** Enable Map SDK for the app in the Mappls console, then test the map live.
 2. **Road test.** Record real helmet noise at 40, 80 and 120 km/h, retune against it, and measure battery on a real ride.
 3. **Two real Android phones.** Prove the Nearby radio link and Bluetooth helmet routing.
 4. **A real iPhone.** Prove the web app, starting in Safari.

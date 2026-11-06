@@ -7,6 +7,12 @@ import { directory } from '../directory/Directory';
 /** Positions fan out in batches so each phone's radio wakes once per interval, not once per rider. */
 const LOC_BATCH_MS = 3000;
 const POSITION_PERSIST_MS = 60_000;
+/** Usage is reported in batches, so that counting it costs almost nothing itself. */
+const USAGE_FLUSH_MS = 60_000;
+/** Cloudflare bills incoming socket messages at 20 to 1. */
+const MESSAGES_PER_REQUEST = 20;
+/** Opus at the capped bitrate, in GB per second of speech per listener. */
+const VOICE_GB_PER_SECOND = 24_000 / 8 / 1e9;
 /** Ride data is deleted this long after the last activity. */
 const RETENTION_MS = 48 * 3600_000;
 
@@ -28,6 +34,11 @@ export class RideRoom extends DurableObject<Env> {
   private readonly pending = new Map<string, Position>();
   private readonly persistedAt = new Map<string, number>();
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
+  private messages = 0;
+  private rowsWritten = 0;
+  private relayGb = 0;
+  private usageFlushedAt = Date.now();
+  private readonly talkingSince = new Map<string, number>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -190,6 +201,10 @@ export class RideRoom extends DurableObject<Env> {
 
   private handle(rider: Rider, msg: ClientMessage): void {
     rider.lastSeen = Date.now();
+    this.messages++;
+    if (msg.t === 'talk') this.meterTalk(rider, !!msg.on);
+    if (msg.t.startsWith('stop.')) this.rowsWritten++;
+    if (Date.now() - this.usageFlushedAt > USAGE_FLUSH_MS) this.flushUsage();
     switch (msg.t) {
       case 'loc':
         return this.onLocation(rider, msg);
@@ -240,6 +255,26 @@ export class RideRoom extends DurableObject<Env> {
     this.broadcast({ t: 'ride', ride: this.info });
   }
 
+  /** Relay egress is speech time multiplied by how many riders it fans out to. */
+  private meterTalk(rider: Rider, on: boolean): void {
+    if (on) {
+      this.talkingSince.set(rider.id, Date.now());
+      return;
+    }
+    const since = this.talkingSince.get(rider.id);
+    this.talkingSince.delete(rider.id);
+    if (!since || !this.env.SFU_APP_ID) return;
+    const listeners = [...this.riders.values()].filter((r) => r.id !== rider.id && r.voice && r.online).length;
+    this.relayGb += ((Date.now() - since) / 1000) * listeners * VOICE_GB_PER_SECOND;
+  }
+
+  private flushUsage(): void {
+    const amounts = { do_requests: this.messages / MESSAGES_PER_REQUEST, rows_written: this.rowsWritten, relay_gb: this.relayGb };
+    this.messages = this.rowsWritten = this.relayGb = 0;
+    this.usageFlushedAt = Date.now();
+    this.ctx.waitUntil(directory(this.env).addUsage(amounts));
+  }
+
   private updateRide(msg: { name?: string; startsAt?: number | null }): void {
     if (!this.info) return;
     const name = typeof msg.name === 'string' ? msg.name.trim().slice(0, 40) : '';
@@ -270,6 +305,7 @@ export class RideRoom extends DurableObject<Env> {
     if (pos.ts - last > POSITION_PERSIST_MS) {
       this.persistedAt.set(rider.id, pos.ts);
       this.sql.exec('UPDATE riders SET pos = ?, last_seen = ? WHERE id = ?', JSON.stringify(pos), pos.ts, rider.id);
+      this.rowsWritten++;
     }
   }
 
@@ -320,9 +356,11 @@ export class RideRoom extends DurableObject<Env> {
     const stillHere = this.ctx.getWebSockets(riderId).some((s) => s !== ws && s.readyState === WebSocket.OPEN);
     const rider = this.riders.get(riderId);
     if (stillHere || !rider) return;
+    if (rider.talking) this.meterTalk(rider, false);
     rider.online = false;
     rider.talking = false;
     rider.lastSeen = Date.now();
+    this.flushUsage();
     this.sql.exec('UPDATE riders SET last_seen = ?, pos = ? WHERE id = ?', rider.lastSeen, rider.pos ? JSON.stringify(rider.pos) : null, riderId);
     this.broadcast({ t: 'rider', rider });
   }

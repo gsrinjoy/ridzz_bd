@@ -18,13 +18,24 @@ const check = (ok, label, detail = '') => {
   if (!ok) failures++;
 };
 
+const approve = async (base, email) => {
+  const headers = { authorization: 'Bearer local-admin-only', 'content-type': 'application/json' };
+  const users = await fetch(`${base}/api/admin/users`, { headers }).then((r) => r.json());
+  const user = users.find((u) => u.email === email);
+  await fetch(`${base}/api/admin/users/${user.id}/approve`, { method: 'POST', headers, body: '{}' });
+};
+
 const signUp = async (page, name) => {
+  const email = `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`;
   await page.click('text=Create an account');
   await page.fill('#name', name);
-  await page.fill('#email', `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`);
+  await page.fill('#email', email);
   await page.fill('#password', 'test-password-1');
   await page.click('button:has-text("Create account")');
   await page.click('text=I saved it');
+  await page.waitForSelector('text=Waiting for approval');
+  await approve(BASE, email);
+  await page.click('text=Check again');
   await page.waitForSelector('#code');
 };
 
@@ -161,6 +172,13 @@ try {
   const recovery = (await a.page.locator('.recovery-code').innerText()).trim();
   check(/^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/.test(recovery), 'sign-up shows a recovery code once');
   await a.page.click('text=I saved it');
+  check(await waitFor(async () => (await a.page.locator('text=Waiting for approval').count()) > 0, 'pending screen'), 'a new account waits for approval');
+  const pendingToken = await a.page.evaluate(() => JSON.parse(localStorage.getItem('slipstream.account')).token);
+  const asPending = { authorization: `Bearer ${pendingToken}`, 'content-type': 'application/json' };
+  check((await fetch(`${BASE}/api/rides`, { method: 'POST', headers: asPending, body: '{}' })).status === 403, 'a pending account cannot create a ride');
+  check((await fetch(`${BASE}/api/places/search?q=abc`, { headers: asPending })).status === 403, 'a pending account cannot use search');
+  await approve(BASE, email);
+  await a.page.click('text=Check again');
   await a.page.waitForSelector('#code');
   await a.page.click('text=Sign out');
   await a.page.waitForSelector('button:has-text("Sign in")');
@@ -405,8 +423,30 @@ try {
   await portal.goto(`${BASE}/admin`);
   await portal.fill('#owner', 'local-admin-only');
   await portal.click('text=Open portal');
-  check(await waitFor(async () => (await portal.locator('.stat-card').count()) === 6, 'portal stats'), 'owner portal opens and shows totals');
+  check(await waitFor(async () => (await portal.locator('.stat-card').count()) === 7, 'portal stats'), 'owner portal opens and shows totals');
   check((await portal.locator(`text=${code}`).count()) > 0, 'owner sees the live ride');
+  check((await portal.locator('.limit').count()) === 7, 'the portal shows every free limit');
+
+  // Approving from the portal itself.
+  const reqContext = await browserB.newContext({ viewport: { width: 412, height: 860 } });
+  const req = await reqContext.newPage();
+  await req.goto(BASE);
+  await req.click('text=Create an account');
+  await req.fill('#name', 'Newbie');
+  await req.fill('#email', `newbie.${Date.now()}@test.example`);
+  await req.fill('#password', 'test-password-1');
+  await req.click('button:has-text("Create account")');
+  await req.click('text=I saved it');
+  await req.waitForSelector('text=Waiting for approval');
+  await portal.reload();
+  check(await waitFor(async () => (await portal.locator('text=1 waiting for approval').count()) > 0, 'pending banner'), 'the portal flags a new request');
+  await portal.click('button:has-text("Users")');
+  await portal.locator('.admin-user:has-text("Newbie") button:has-text("Approve")').click();
+  await new Promise((r) => setTimeout(r, 900));
+  await req.click('text=Check again');
+  check(await req.waitForSelector('#code', { timeout: 8000 }).then(() => true, () => false), 'approving in the portal lets the rider in');
+  await reqContext.close();
+  await portal.click('button:has-text("Rides")');
   await portal.screenshot({ path: `${outDir}/admin.png`, fullPage: true });
   portal.on('dialog', (d) => d.accept());
   await portal.locator('.row:has-text("Cara") button:has-text("Remove")').click();

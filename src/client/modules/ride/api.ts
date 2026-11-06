@@ -10,9 +10,10 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { 'content-type': 'application/json', ...(a ? { authorization: `Bearer ${a.token}` } : {}), ...init?.headers },
   });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await res.json().catch(() => ({}))) as T & { error?: string; pending?: boolean };
   // The session expired or was revoked, so the rider has to sign in again.
   if (res.status === 401 && a) setAccount(null);
+  if (res.status === 403 && data.pending && a) setAccount({ ...a, approved: false });
   if (!res.ok) throw new Error(data.error ?? 'Could not reach the server');
   return data;
 }
@@ -28,6 +29,7 @@ export const login = (email: string, password: string) => send<Account>('POST', 
 export const recoverAccount = (email: string, code: string, password: string) =>
   send<Registered>('POST', '/api/auth/recover', { email, code, password });
 export const changePassword = (current: string, next: string) => send<Account>('POST', '/api/auth/password', { current, next });
+export const checkApproval = () => call<{ approved: boolean }>('/api/auth/me');
 export const signOutSession = () => send('POST', '/api/auth/logout', {});
 export const updateProfile = (name: string, color: string) => send('PATCH', '/api/accounts/me', { name, color });
 

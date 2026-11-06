@@ -1,3 +1,5 @@
+import type { BudgetView } from './budgets';
+
 /** Wire format between client and RideRoom. Keys are short because location messages dominate traffic. */
 
 export type StopKind = 'start' | 'fuel' | 'food' | 'rest' | 'view' | 'regroup' | 'finish';
@@ -96,6 +98,8 @@ export interface Account {
   name: string;
   color: string;
   friendCode: string;
+  /** The app is private: nothing works until the owner approves the account. */
+  approved: boolean;
 }
 
 /** Returned once, at sign-up or recovery. The code is never stored in readable form. */
@@ -133,6 +137,7 @@ export interface AdminUser extends FriendInfo {
   createdAt: number;
   lastSeen: number;
   blocked: boolean;
+  approved: boolean;
   friends: number;
   ridesLogged: number;
 }
@@ -160,12 +165,14 @@ export interface AdminRide {
 
 export interface AdminOverview {
   users: number;
+  pendingUsers: number;
   blockedUsers: number;
   friendships: number;
   rides: number;
   liveRides: number;
   ridersOnline: number;
   services: { voiceRelay: boolean; turn: boolean; mappls: boolean };
+  budgets: BudgetView[];
 }
 
 export type VoiceConfig =

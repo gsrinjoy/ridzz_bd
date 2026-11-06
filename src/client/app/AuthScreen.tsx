@@ -1,14 +1,15 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import { RIDER_COLORS, type Account } from '../../shared/protocol';
-import { login, recoverAccount, register } from '../modules/ride/api';
+import { checkApproval, login, recoverAccount, register } from '../modules/ride/api';
 import { Copy, Logo } from '../ui/icons';
-import { notice, setAccount } from './store';
+import { signOut } from './session';
+import { account, notice, setAccount } from './store';
 
 type Mode = 'signin' | 'register' | 'recover';
 
 const TITLES: Record<Mode, string> = {
   signin: 'Welcome back',
-  register: 'Create your account',
+  register: 'Request an account',
   recover: 'Reset your password',
 };
 
@@ -25,6 +26,43 @@ function SaveRecovery({ code, onDone }: { code: string; onDone: () => void }) {
           <Copy /> {copied ? 'Copied' : 'Copy code'}
         </button>
         <button class="btn primary block" onClick={onDone}>I saved it</button>
+      </div>
+    </main>
+  );
+}
+
+const APPROVAL_POLL_MS = 20_000;
+
+/** The app is private, so a new account waits here until the owner lets it in. */
+export function PendingScreen() {
+  const [checked, setChecked] = useState(false);
+
+  async function check() {
+    const a = account.peek();
+    const { approved } = await checkApproval();
+    if (approved && a) setAccount({ ...a, approved: true });
+    setChecked(true);
+  }
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') void check().catch(() => undefined);
+    }, APPROVAL_POLL_MS);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <main class="home">
+      <div class="home-card">
+        <div class="mark">
+          <Logo />
+          <h1>Slipstream</h1>
+        </div>
+        <h2 class="stats-title">Waiting for approval</h2>
+        <p class="note">This is a private group. The owner needs to approve your account before you can ride. This screen opens by itself once they do.</p>
+        {checked && <p class="note" role="status">Not approved yet.</p>}
+        <button class="btn primary block" onClick={() => void check()}>Check again</button>
+        <button class="btn block" onClick={() => void signOut()}>Sign out</button>
       </div>
     </main>
   );
@@ -72,6 +110,7 @@ export function AuthScreen() {
           <h1>Slipstream</h1>
         </div>
         <p class="tagline"><b>{TITLES[mode]}</b></p>
+        {mode === 'register' && <p class="note">A private group. The owner approves each account before it can be used.</p>}
         {notice.value && <p class="banner" role="status">{notice.value}</p>}
 
         {mode === 'register' && (

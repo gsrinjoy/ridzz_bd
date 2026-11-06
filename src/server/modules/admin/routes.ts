@@ -47,12 +47,14 @@ export async function adminRoutes(request: Request, env: Env, path: string[]): P
     const online = rides.flatMap((r) => r.riders).filter((r) => r.online);
     return json({
       users: users.length,
+      pendingUsers: users.filter((u) => !u.approved).length,
       blockedUsers: users.filter((u) => u.blocked).length,
       friendships,
       rides: rides.length,
       liveRides: rides.filter((r) => r.riders.some((x) => x.online)).length,
       ridersOnline: online.length,
       services: { voiceRelay: !!env.SFU_APP_ID && !!env.SFU_APP_SECRET, turn: !!env.TURN_KEY_ID, mappls: !!env.MAPPLS_KEY },
+      budgets: await dir.budgets(),
     } satisfies AdminOverview);
   }
 
@@ -77,6 +79,10 @@ export async function adminRoutes(request: Request, env: Env, path: string[]): P
       const { blocked } = await request.json<{ blocked?: boolean }>();
       await dir.setBlocked(id, blocked === true);
       if (blocked) await removeFromRides(env, id);
+      return json({ ok: true });
+    }
+    if (request.method === 'POST' && action === 'approve') {
+      await dir.approve(id);
       return json({ ok: true });
     }
     if (request.method === 'POST' && action === 'reset-password') {

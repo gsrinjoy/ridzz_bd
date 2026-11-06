@@ -4,6 +4,8 @@ import { directory, type UserRow } from '../directory/Directory';
 import { passwordProblem, validEmail } from './passwords';
 
 const MINUTE = 60_000;
+/** Enough for a group of friends joining at once, and a ceiling on what strangers can add. */
+const MAX_PENDING = 20;
 
 const cleanName = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, 24) : '');
 const cleanColor = (v: unknown) => (typeof v === 'string' && RIDER_COLORS.includes(v) ? v : (RIDER_COLORS[0] as string));
@@ -13,21 +15,28 @@ export const clientIp = (request: Request) => request.headers.get('cf-connecting
 
 const bearer = (request: Request) => request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
 
-const toAccount = (user: UserRow, token: string): Account => ({ userId: user.id, token, name: user.name, color: user.color, friendCode: user.friend_code });
+const toAccount = (user: UserRow, token: string): Account => ({ userId: user.id, token, name: user.name, color: user.color, friendCode: user.friend_code, approved: !!user.approved });
 
 /** Resolves the caller, or returns the error response to send back. */
-export async function currentUser(request: Request, env: Env): Promise<UserRow | Response> {
+export async function currentUser(request: Request, env: Env, allowPending = false): Promise<UserRow | Response> {
   const token = bearer(request);
   if (!token) return fail(401, 'Please sign in');
   const user = await directory(env).authenticate(token);
   if (!user) return fail(401, 'Please sign in again');
   if (user.blocked) return fail(403, 'This account has been blocked');
+  // The app is private: an account does nothing until the owner approves it.
+  if (!user.approved && !allowPending) return json({ error: 'Waiting for the owner to approve your account', pending: true }, 403);
   return user;
 }
 
 export async function authRoutes(request: Request, env: Env, path: string[]): Promise<Response | undefined> {
   const [, resource, action] = path;
-  if (resource !== 'auth' || request.method !== 'POST') return undefined;
+  if (resource !== 'auth') return undefined;
+  if (request.method === 'GET' && action === 'me') {
+    const me = await currentUser(request, env, true);
+    return me instanceof Response ? me : json({ approved: !!me.approved });
+  }
+  if (request.method !== 'POST') return undefined;
   const dir = directory(env);
   const ip = clientIp(request);
   const body = await request.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
@@ -41,6 +50,7 @@ export async function authRoutes(request: Request, env: Env, path: string[]): Pr
     if (!validEmail(email)) return fail(400, 'Enter a valid email address');
     const problem = passwordProblem(body.password);
     if (problem) return fail(400, problem);
+    if ((await dir.pendingCount()) >= MAX_PENDING) return fail(429, 'Sign-ups are paused for now. Ask the owner.');
     const made = await dir.register(name, cleanColor(body.color), email, body.password as string);
     if (!made) return fail(409, 'That email already has an account. Sign in instead.');
     return json({ account: toAccount(made.user, made.token), recoveryCode: made.recoveryCode } satisfies Registered);
@@ -72,7 +82,7 @@ export async function authRoutes(request: Request, env: Env, path: string[]): Pr
     return json({ account: toAccount(done.user, done.token), recoveryCode: done.recoveryCode } satisfies Registered);
   }
 
-  const me = await currentUser(request, env);
+  const me = await currentUser(request, env, true);
   if (me instanceof Response) return me;
 
   if (action === 'logout') {

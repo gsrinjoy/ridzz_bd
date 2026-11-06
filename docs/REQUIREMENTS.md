@@ -7,7 +7,7 @@ Every requirement raised during the build, with its status and how it was proven
 - **Needs device**: built, but only real hardware can prove it.
 - **Not possible**: a platform rule prevents it. The closest alternative is listed.
 
-Tests: `unit` (116), `call` (two real Chrome browsers over WebRTC), `webkit` (Safari engine), `layout` (four phone sizes), `android` (the real APK on Android 15), `live` (the deployed site).
+Tests: `unit` (123), `call` (two real Chrome browsers over WebRTC), `webkit` (Safari engine), `layout` (four phone sizes), `android` (the real APK on Android 15), `live` (the deployed site, including a real call through the relay).
 
 ## Voice and call
 
@@ -23,13 +23,13 @@ Tests: `unit` (116), `call` (two real Chrome browsers over WebRTC), `webkit` (Sa
 | Call deck: mute, end call, participants, volume | Done | call |
 | Change speaker and mic, Bluetooth | Done | call and android on speaker. Bluetooth needs a real headset. iPhone: Control Center |
 | Audio cues: join, leave, reconnect, call cut | Done | unit and call |
-| Voice works on mobile data | Needs key | Cloudflare voice relay and TURN |
+| Voice through the Cloudflare relay | Done | live call: 39 ms to the relay, real audio received. Real mobile networks still need a ride |
 
 ## Map, tracking and planning
 
 | Requirement | Status | Proof or note |
 |---|---|---|
-| Mappls in-app map | Needs key | Adapter unit-tested. Falls back automatically until the key is set |
+| Mappls in-app map | Needs key | Key is valid, but Mappls refuses it until Map SDK access is enabled for the app. Falls back automatically meanwhile |
 | Button hands off to Google Maps | Done | call: two-wheeler navigation link. Free, no key |
 | Ride planner: total ride, stops, group sync | Done | call: name, time, stops, order reach other riders |
 | Search for places | Done | live: free search works |
@@ -62,6 +62,8 @@ Tests: `unit` (116), `call` (two real Chrome browsers over WebRTC), `webkit` (Sa
 | Invitation link, QR, WhatsApp | Done | call |
 | Owner portal: view and manage everything | Done | call and live: rides, riders, users, stats, block, reset |
 | Security headers, rate limits, origin checks | Done | live |
+| Private app: approval required | Done | call and live: unapproved accounts are refused everywhere; approved in the portal |
+| Free limit guard and warnings | Done | unit and live: seven meters in the portal, warn at 70%, lock at 95%. Estimates |
 
 ## Platform, quality, delivery
 

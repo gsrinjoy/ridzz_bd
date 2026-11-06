@@ -10,13 +10,24 @@ const PORT = 8789;
 const BASE = `http://127.0.0.1:${PORT}`;
 const outDir = resolve(process.argv[2] ?? '.');
 const SIZES = [[320, 568], [360, 740], [390, 844], [412, 915]];
+const approve = async (base, email) => {
+  const headers = { authorization: 'Bearer local-admin-only', 'content-type': 'application/json' };
+  const users = await fetch(`${base}/api/admin/users`, { headers }).then((r) => r.json());
+  const user = users.find((u) => u.email === email);
+  await fetch(`${base}/api/admin/users/${user.id}/approve`, { method: 'POST', headers, body: '{}' });
+};
+
 const signUp = async (page, name) => {
+  const email = `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`;
   await page.click('text=Create an account');
   await page.fill('#name', name);
-  await page.fill('#email', `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`);
+  await page.fill('#email', email);
   await page.fill('#password', 'test-password-1');
   await page.click('button:has-text("Create account")');
   await page.click('text=I saved it');
+  await page.waitForSelector('text=Waiting for approval');
+  await approve(BASE, email);
+  await page.click('text=Check again');
   await page.waitForSelector('#code');
 };
 
@@ -123,6 +134,7 @@ for (const [width, height] of SIZES) {
     const post = (path, body, headers = {}) => fetch(`${BASE}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }).then((r) => r.json());
     // A made-up address per seeded rider, as the sign-up limit counts per network.
     const { account: a } = await post('/api/auth/register', { name, color, email: `${Math.random().toString(36).slice(2)}@test.example`, password: 'test-password-1' }, { 'cf-connecting-ip': `10.0.0.${Math.floor(Math.random() * 250)}` });
+    await post(`/api/admin/users/${a.userId}/approve`, {}, { authorization: 'Bearer local-admin-only' });
     const j = await post(`/api/rides/${code}/join`, {}, { authorization: `Bearer ${a.token}` });
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}/api/rides/${code}/ws?rider=${j.riderId}&token=${j.token}`);
     await new Promise((r) => (ws.onopen = r));

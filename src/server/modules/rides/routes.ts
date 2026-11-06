@@ -28,6 +28,10 @@ export async function ridesRoutes(request: Request, env: Env, path: string[]): P
   if (request.method === 'POST' && !code) {
     const user = await currentUser(request, env);
     if (user instanceof Response) return user;
+    const dir = directory(env);
+    if ((await dir.isLocked('do_requests')) || (await dir.isLocked('worker_requests'))) {
+      return fail(429, "Today's free limit is nearly used. Try again tomorrow.");
+    }
     const input = await request.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
     const newCode = newRideCode();
     const name = cleanName(input.rideName, `${user.name}'s ride`);

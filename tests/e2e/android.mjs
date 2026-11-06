@@ -80,11 +80,16 @@ async function signUpOn(page) {
   await page.clickText('Create an account');
   await page.waitFor('#name');
   await page.fill('#name', 'Dev');
-  await page.fill('#email', `dev.${Date.now()}@test.example`);
+  const email = `dev.${Date.now()}@test.example`;
+  await page.fill('#email', email);
   await page.fill('#password', 'test-password-1');
   await page.clickText('Create account');
   await page.waitFor('.recovery-code');
   await page.clickText('I saved it');
+  const headers = { authorization: 'Bearer local-admin-only', 'content-type': 'application/json' };
+  const users = await fetch(`http://127.0.0.1:${PORT}/api/admin/users`, { headers }).then((r) => r.json());
+  await fetch(`http://127.0.0.1:${PORT}/api/admin/users/${users.find((u) => u.email === email).id}/approve`, { method: 'POST', headers, body: '{}' });
+  await page.clickText('Check again');
   await page.waitFor('#code');
 }
 

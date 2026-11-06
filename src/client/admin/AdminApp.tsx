@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'preact/hooks';
 import { directionsUrl } from '../../shared/mapsLink';
 import type { AdminOverview, AdminRide, AdminUser } from '../../shared/protocol';
+import type { BudgetView } from '../../shared/budgets';
 import { avgMovingKmh, type RideSummary } from '../../shared/stats';
 import { ago, initial } from '../app/format';
 import { Logo } from '../ui/icons';
 
 const KEY = 'slipstream.owner';
-const REFRESH_MS = 5000;
+// Slow on purpose: the portal's own requests count against the same free limits.
+const REFRESH_MS = 30_000;
 
 function savedToken(): string {
   try {
@@ -64,6 +66,44 @@ const Service = ({ name, on, off }: { name: string; on: boolean; off: string }) 
   <div class="service"><span class={`dot ${on ? 'live' : 'warn'}`} /><span><b>{name}</b><div class="note">{on ? 'Configured' : off}</div></span></div>
 );
 
+const STATE_TEXT = { ok: 'OK', warning: 'Approaching limit', critical: 'Nearly at limit', locked: 'Locked to stay free' } as const;
+
+const amount = (b: BudgetView) => (b.unit === 'GB' ? b.used.toFixed(2) : Math.round(b.used).toLocaleString());
+
+function FreeLimits({ budgets }: { budgets: BudgetView[] }) {
+  const worst = budgets.filter((b) => b.state !== 'ok');
+  return (
+    <section class="admin-card limits">
+      <header class="admin-card-head">
+        <div>
+          <b>Free limits</b>
+          <div class="note">Estimated from the app's own counters. Exact figures are in the Cloudflare dashboard.</div>
+        </div>
+      </header>
+      {worst.map((b) => (
+        <p key={b.metric} class={`limit-alert ${b.state}`} role="alert">
+          <b>{b.label}: {STATE_TEXT[b.state]}.</b>{b.lock ? ` At 95%: ${b.lock.toLowerCase()}.` : ''}
+        </p>
+      ))}
+      {budgets.map((b) => {
+        const share = Math.min(100, (b.used / b.limit) * 100);
+        return (
+          <div key={b.metric} class="limit">
+            <div class="limit-row">
+              <span>{b.label}{b.billable ? ' *' : ''}</span>
+              <span class="note num">{amount(b)} / {b.limit.toLocaleString()} {b.unit} per {b.period}</span>
+            </div>
+            <div class="limit-track" role="img" aria-label={`${b.label}: ${share.toFixed(0)} percent used, ${STATE_TEXT[b.state]}`}>
+              <i class={b.state} style={{ width: `${Math.max(share, 0.5)}%` }} />
+            </div>
+          </div>
+        );
+      })}
+      <p class="note">* Going past these could cost money, so the app locks them at 95%. The others simply stop at the limit.</p>
+    </section>
+  );
+}
+
 function RideCard({ ride, act }: { ride: AdminRide; act: (path: string, body?: unknown) => void }) {
   const online = ride.riders.filter((r) => r.online).length;
   return (
@@ -105,11 +145,12 @@ function UserRow({ user, token, act, remove }: { user: AdminUser; token: string;
       <div class="row">
         <span class={`avatar ${user.blocked ? 'off' : ''}`} style={{ background: user.color }}>{initial(user.name)}</span>
         <span class="row-main">
-          <div class="row-title">{user.name}{user.blocked ? ' (blocked)' : ''}</div>
+          <div class="row-title">{user.name}{user.blocked ? ' (blocked)' : ''}{user.approved ? '' : ' (waiting for approval)'}</div>
           <div class="row-sub num">{user.email} · {user.friendCode} · {user.friends} friends · {user.ridesLogged} rides · seen {ago(user.lastSeen)}</div>
         </span>
       </div>
       <div class="admin-actions">
+        {!user.approved && <button class="btn primary" onClick={() => act(`users/${user.id}/approve`)}>Approve</button>}
         <button class="btn" onClick={() => void api<RideSummary[]>(token, `users/${user.id}/stats`).then(setLogs)}>Rides</button>
         <button class="btn" onClick={() => void reset()}>Reset password</button>
         <button class="btn" onClick={() => act(`users/${user.id}/block`, { blocked: !user.blocked })}>{user.blocked ? 'Unblock' : 'Block'}</button>
@@ -168,6 +209,12 @@ export function AdminApp() {
       </header>
       {error && <p class="error" role="alert">{error}</p>}
 
+      {overview && overview.pendingUsers > 0 && (
+        <p class="pending-banner" role="alert">
+          <b>{overview.pendingUsers} waiting for approval.</b> Only approve people you know.
+        </p>
+      )}
+
       {overview && (
         <>
           <div class="stat-grid">
@@ -175,6 +222,7 @@ export function AdminApp() {
             <Stat label="Live rides" value={overview.liveRides} />
             <Stat label="All rides" value={overview.rides} />
             <Stat label="Users" value={overview.users} />
+            <Stat label="Pending" value={overview.pendingUsers} />
             <Stat label="Blocked" value={overview.blockedUsers} />
             <Stat label="Friendships" value={overview.friendships} />
           </div>
@@ -183,16 +231,17 @@ export function AdminApp() {
             <Service name="TURN" on={overview.services.turn} off="Some networks may fail" />
             <Service name="Mappls" on={overview.services.mappls} off="Using the backup map" />
           </div>
+          <FreeLimits budgets={overview.budgets} />
         </>
       )}
 
       <div class="seg admin-tabs" role="group" aria-label="View">
         <button aria-pressed={view === 'rides'} onClick={() => setView('rides')}>Rides ({rides.length})</button>
-        <button aria-pressed={view === 'users'} onClick={() => setView('users')}>Users ({users.length})</button>
+        <button aria-pressed={view === 'users'} onClick={() => setView('users')}>Users ({users.length}){overview?.pendingUsers ? ` · ${overview.pendingUsers} new` : ''}</button>
       </div>
 
       {view === 'rides' && (rides.length ? rides.map((r) => <RideCard key={r.code} ride={r} act={act} />) : <p class="note">No rides right now.</p>)}
-      {view === 'users' && <section class="admin-card">{users.map((u) => <UserRow key={u.id} user={u} token={token} act={act} remove={remove} />)}</section>}
+      {view === 'users' && <section class="admin-card">{[...users].sort((a, b) => Number(a.approved) - Number(b.approved)).map((u) => <UserRow key={u.id} user={u} token={token} act={act} remove={remove} />)}</section>}
     </main>
   );
 }
