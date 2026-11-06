@@ -8,5 +8,7 @@ module.exports = {
   appName: 'Slipstream',
   webDir: 'dist',
   android: { backgroundColor: '#08090B' },
+  // Light icons always: left to follow the phone, they vanish against the dark app in light mode.
+  plugins: { SystemBars: { style: 'DARK' } },
   ...(url ? { server: { url, cleartext: url.startsWith('http://') } } : {}),
 };
