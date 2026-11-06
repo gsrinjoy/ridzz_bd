@@ -59,14 +59,29 @@ The server owns the phase, so everyone moves together and a rider arriving late 
 
 ## Free-tier budget
 
-For one 8-hour ride with 10 riders:
+For one 9-hour ride with 10 riders:
 
-| Limit | Free allowance | Estimated use |
-|---|---|---|
-| Durable Object requests | 100,000 a day | About 3,000 (WebSocket messages bill at 20:1) |
-| Durable Object duration | 13,000 GB-s a day | About 3,600 |
-| Rows written | 100,000 a day | About 5,000 (positions persist once a minute) |
-| Realtime SFU and TURN egress | 1,000 GB a month | Under 10 GB per ride, with gated audio |
+| Limit | Free allowance | Estimated use | Share |
+|---|---|---|---|
+| Durable Object time | 13,000 GB-s a day | About 4,150 | 32% of a day |
+| Durable Object requests | 100,000 a day | About 3,300 (socket messages bill at 20:1) | 3% of a day |
+| Rows written | 100,000 a day | About 5,400 (positions persist once a minute) | 5% of a day |
+| Voice relay data, typical | 1,000 GB a month | About 0.2 GB, one rider talking 20% of the time | 0.02% of a month |
+| Voice relay data, worst case | 1,000 GB a month | About 8.7 GB, all ten on open mic for 9 hours | 0.9% of a month |
+
+So a 9-hour ride is comfortable: about three of them fit in one day, and the relay allows over 100 worst-case rides a month.
+
+## Staying on the air
+
+A call has three paths, and moves between them with no taps:
+
+| Path | Cost | When | Limit |
+|---|---|---|---|
+| 1. Cloudflare relay | Free to 1,000 GB a month | Normal | The most reliable on mobile data |
+| 2. Direct phone-to-phone | Free, always | Relay locked at 95%, or switched off in the portal | Can fail on strict mobile networks |
+| 3. Nearby (Android only) | Free, always | Internet lost for 6 seconds | Riders in radio range only |
+
+Moving from 1 to 2 is driven by the server, which tells every rider on the ride. It is proven on the live site. Moving to 3 cannot be: with no internet the server cannot reach the phone, so the phone decides for itself. Near a daily limit, eco mode slows location updates so the ride can finish. If a daily Durable Object limit is hit anyway, voice over the relay keeps running, because it does not pass through them; location sharing stops until the reset at 00:00 UTC.
 
 ## Measured results
 
@@ -101,7 +116,8 @@ The raw mic scores better with Whisper in every row, and that needs reading care
 
 - **No road test yet.** Noise figures are simulated. Real wind in a helmet may differ a lot.
 - **Extreme wind.** With speech buried below the noise (harsh wind at 120 km/h, -12 dB in the speech band), no software recovers it. Mic hardware matters more than anything here: a boom mic with a wind sock, inside the helmet.
-- **iPhone web.** Apple does not let websites use the mic or GPS with the screen locked or the browser in the background. iPhone riders must keep Slipstream open on screen, mounted and ideally charging. The app keeps the screen awake and recovers by itself on return, but opening Google Maps pauses their voice. Speaker choice comes from Control Center, and per-rider volume is mute-only. The Safari engine is tested, but a real iPhone is not. WebKit reports also suggest the mic can misbehave in Home Screen apps, so riders should test Safari first.
+- **iPhone web.** Apple does not let websites use the mic or GPS with the screen locked or the browser in the background, even when installed from Chrome. Pocket mode is the free answer: the app stays open on a fully black screen, with Guided Access for touch. Opening Google Maps pauses voice, and it recovers on return. Speaker choice comes from Control Center, and per-rider volume is mute-only. The Safari engine is tested, but a real iPhone is not. WebKit reports suggest the mic can misbehave in Home Screen apps, so riders should use Safari.
+- **iPhone app.** A native build with background audio and GPS compiles and is published, installed free through SideStore. It has never run on a real iPhone, so screen-off behaviour is unproven. Free installs need a Wi-Fi refresh within 7 days. See docs/IPHONE.md.
 - **Bluetooth helmets.** Routing is built, but the emulator has no Bluetooth. On the emulator the capture source was `CAMCORDER`, which on some phones may bypass a Bluetooth mic. Needs a real phone and intercom.
 - **Battery.** Not measured. An emulator cannot give meaningful numbers, so this needs a real ride.
 - **Horns.** They are loud and tonal, so a horn can open the mic for about a second.
@@ -117,6 +133,6 @@ The raw mic scores better with Whisper in every row, and that needs reading care
 1. **Mappls access.** Enable Map SDK for the app in the Mappls console, then test the map live.
 2. **Road test.** Record real helmet noise at 40, 80 and 120 km/h, retune against it, and measure battery on a real ride.
 3. **Two real Android phones.** Prove the Nearby radio link and Bluetooth helmet routing.
-4. **A real iPhone.** Prove the web app, starting in Safari.
+4. **A real iPhone.** Prove pocket mode in Safari, then the SideStore app with the screen locked.
 5. **Mappls search** for Indian places, once a real key exists to test with.
 6. **Crash detection**, if the group wants it.

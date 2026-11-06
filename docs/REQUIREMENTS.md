@@ -7,7 +7,7 @@ Every requirement raised during the build, with its status and how it was proven
 - **Needs device**: built, but only real hardware can prove it.
 - **Not possible**: a platform rule prevents it. The closest alternative is listed.
 
-Tests: `unit` (123), `call` (two real Chrome browsers over WebRTC), `webkit` (Safari engine), `layout` (four phone sizes), `android` (the real APK on Android 15), `live` (the deployed site, including a real call through the relay).
+Tests: `unit` (126), `call` (two real Chrome browsers over WebRTC), `webkit` (Safari engine), `layout` (four phone sizes), `android` (the real APK on Android 15), `live` (the deployed site, including a real call through the relay).
 
 ## Voice and call
 
@@ -63,7 +63,10 @@ Tests: `unit` (123), `call` (two real Chrome browsers over WebRTC), `webkit` (Sa
 | Owner portal: view and manage everything | Done | call and live: rides, riders, users, stats, block, reset |
 | Security headers, rate limits, origin checks | Done | live |
 | Private app: approval required | Done | call and live: unapproved accounts are refused everywhere; approved in the portal |
-| Free limit guard and warnings | Done | unit and live: seven meters in the portal, warn at 70%, lock at 95%. Estimates |
+| Free limit guard and warnings | Done | unit and live: eight meters in the portal, warn at 70%, lock at 95%. Estimates |
+| Keep calls running past a limit | Done | live call: moved to direct links and back with no taps, audio throughout |
+| 8 to 9 hour calls | Needs device | Budget fits with room to spare. A 25-minute live soak is the longest tested |
+| Owner password change in the portal | Done | call: old password stops at once |
 
 ## Platform, quality, delivery
 
@@ -75,9 +78,12 @@ Tests: `unit` (123), `call` (two real Chrome browsers over WebRTC), `webkit` (Sa
 | Google Play services | Done | android: Nearby starts on real Play services |
 | Screen-off voice and GPS on Android | Done | android: 21 s with the screen off, not killed |
 | iPhone web parity | Needs device | webkit passes, including the voice chain. A real iPhone has not been tested |
-| iPhone screen-off voice and GPS | Not possible | Apple stops web apps when locked, even when installed from Chrome. Ride mode on a mount, or a native app |
-| Nearby voice, Android | Needs device | Built. Starts on Play services and voice path tested, but radio link needs two phones |
-| Nearby voice, iPhone and web | Not possible | No website can use it, and an iPhone app needs Apple's paid account |
+| iPhone with the screen off, in the web app | Not possible | Apple stops web apps when locked, even installed from Chrome. Pocket mode is the free workaround: black screen, Guided Access. See docs/IPHONE.md |
+| iPhone with the screen off, native app | Needs device | Compiles in CI and is published. Free install through SideStore, refreshed within 7 days. Never run on a real iPhone |
+| Nearby permission, Android | Done | android: asked when joining the call, so it is settled before the internet is lost |
+| Nearby voice, Android | Needs device | Built. Starts on Play services and voice path tested, but the radio link needs two phones |
+| Nearby, web | Not possible | Browsers have no such feature on any phone. Settings says so plainly |
+| Nearby, iPhone app | Not possible today | Google's version is unproven between iPhone and Android; Apple's only links iPhones |
 | Low battery | Needs device | Designed for it throughout. Only a real ride can measure it |
 | Low RAM | Done | android: about 176 to 210 MB in the pocket |
 | Modular monolith, 10 riders | Done | Enforced at 10 on the server |

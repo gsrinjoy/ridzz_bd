@@ -29,7 +29,7 @@ pnpm run deploy
 
 The app is then live at `https://ridzz.<your-subdomain>.workers.dev`, and the owner portal at `/admin`.
 
-New accounts cannot do anything until you approve them in the portal. To change the portal password, run `pnpm exec wrangler secret put ADMIN_TOKEN`.
+New accounts cannot do anything until you approve them in the portal. Change the owner password in the portal itself. If you forget it, run `pnpm exec wrangler secret put ADMIN_TOKEN` and sign in with the new value.
 
 ### Optional keys
 
@@ -56,6 +56,10 @@ The APK is at `android/app/build/outputs/apk/debug/app-debug.apk`. It loads the 
 
 For a release build to share, run `./gradlew assembleRelease`. It signs with the key in `~/.slipstream/`. **Back that folder up**: Android only accepts updates signed with the same key.
 
+## iPhone app
+
+Pushing changes under `ios/` builds the app on GitHub's Macs and publishes `Slipstream.ipa` at the `ios-latest` release, so no local Xcode is needed. See [docs/IPHONE.md](docs/IPHONE.md) for installing it.
+
 ## Test
 
 | Command | What it covers |
@@ -67,7 +71,8 @@ For a release build to share, run `./gradlew assembleRelease`. It signs with the
 | `node tests/e2e/nearby-voice.mjs` | The local voice path on real WebCodecs |
 | `node tests/e2e/android.mjs` | The real APK on a booted emulator; needs an APK built with `APP_URL=http://localhost:8792` |
 | `OWNER=<password> node tests/e2e/live.mjs <url>` | A deployed site, end to end; removes its own test data |
-| `OWNER=<password> node tests/e2e/live-call.mjs <url> <outDir>` | A real call through the real voice relay and map |
+| `OWNER=<password> node tests/e2e/live-call.mjs <url> <outDir>` | A real call through the real voice relay and map, including failover |
+| `OWNER=<password> MINUTES=25 node tests/e2e/soak.mjs <url>` | Holds a real call open and watches for drift |
 
 ## Layout
 
