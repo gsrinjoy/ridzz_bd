@@ -52,6 +52,9 @@ style.layers = style.layers
 
 delete style.sources.ne2_shaded;
 // Resolved through the Worker, whose cache answers in milliseconds after the first rider.
-style.sources.openmaptiles.url = '/api/map/tiles.json';
+// Through the Worker, because some networks cannot reach every address of the tile host.
+style.sources.openmaptiles.url = '/api/map/index.json';
+style.glyphs = style.glyphs.replace('https://tiles.openfreemap.org', '/api/map/file');
+style.sprite = style.sprite.replace('https://tiles.openfreemap.org', '/api/map/file');
 writeFileSync('public/map-style.json', JSON.stringify(style));
 console.log(`${style.layers.length} layers, ${JSON.stringify(style).length} bytes`);

@@ -5,9 +5,11 @@
  */
 export const KIND_AUDIO = 1;
 export const KIND_CONTROL = 2;
+export const KIND_HELLO = 3;
 
 const HEADER = 8;
-const MAX_HOPS = 3;
+/** Enough for the biggest group in a single line of bikes. */
+const MAX_HOPS = 9;
 
 export interface Packet {
   kind: number;
@@ -65,6 +67,32 @@ export class Relay {
     }
     return p.hops < MAX_HOPS ? { deliver: true, forward: { ...p, hops: p.hops + 1 } } : { deliver: true };
   }
+}
+
+/** Frames are sent in pairs: half the packets means half the radio overhead, for 20 ms of delay. */
+export function encodeFrames(frames: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(frames.reduce((n, f) => n + 2 + f.length, 0));
+  const view = new DataView(out.buffer);
+  let at = 0;
+  for (const f of frames) {
+    view.setUint16(at, f.length);
+    out.set(f, at + 2);
+    at += 2 + f.length;
+  }
+  return out;
+}
+
+export function decodeFrames(body: Uint8Array): Uint8Array[] {
+  const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
+  const frames: Uint8Array[] = [];
+  let at = 0;
+  while (at + 2 <= body.length) {
+    const length = view.getUint16(at);
+    if (at + 2 + length > body.length) break;
+    frames.push(body.slice(at + 2, at + 2 + length));
+    at += 2 + length;
+  }
+  return frames;
 }
 
 export const toBase64 = (bytes: Uint8Array) => {

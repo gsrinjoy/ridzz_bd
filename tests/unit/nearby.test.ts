@@ -38,8 +38,8 @@ describe('relay', () => {
   it('ignores its own packets coming back', () => {
     expect(new Relay(7).receive(packet({ sender: 7 }))).toEqual({ deliver: false });
   });
-  it('stops forwarding after three hops but still plays', () => {
-    const r = new Relay(1).receive(packet({ hops: 3 }));
+  it('stops forwarding after nine hops but still plays', () => {
+    const r = new Relay(1).receive(packet({ hops: 9 }));
     expect(r.deliver).toBe(true);
     expect(r.forward).toBeUndefined();
   });

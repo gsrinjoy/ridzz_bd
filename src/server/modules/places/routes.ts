@@ -8,6 +8,10 @@ import { googleSearch } from './google';
 
 const UA = { 'user-agent': 'Slipstream/0.1 (private group-ride app)' };
 const DAY = 'public, max-age=86400';
+const MONTH_S = 2_592_000;
+const MAP_HOST = 'https://tiles.openfreemap.org';
+/** Exactly the files a map needs, so this can never serve as a general proxy. */
+const MAP_FILE = /^(planet\/[\w-]+\/\d{1,2}\/\d{1,7}\/\d{1,7}\.pbf|fonts\/[\w%-]+\/\d+-\d+\.pbf|sprites\/[\w-]+\/[\w@-]+\.(json|png))$/;
 
 interface PhotonFeature {
   geometry: { coordinates: [number, number] };
@@ -90,16 +94,37 @@ async function route(coords: string): Promise<Response> {
   );
 }
 
-/** The tile index, cached at the edge so that only the first rider of the day waits for it. */
-async function tileIndex(): Promise<Response> {
-  const res = await fetch('https://tiles.openfreemap.org/planet', { headers: UA, cf: { cacheTtl: 86400, cacheEverything: true } });
+/**
+ * Map files come through this Worker because the page is already connected here.
+ * The tile host has several addresses and some networks cannot reach all of them:
+ * in India a browser was seen hanging on a dead one for 30 seconds and more.
+ */
+export async function mapFile(request: Request, file: string): Promise<Response> {
+  const site = request.headers.get('sec-fetch-site');
+  if ((site && site !== 'same-origin') || !MAP_FILE.test(file)) return fail(404, 'Not found');
+  const upstream = await fetch(`${MAP_HOST}/${file}`, { headers: UA, cf: { cacheTtl: MONTH_S, cacheEverything: true } });
+  // Reusing the response keeps the host's compression, which matters on mobile data.
+  const response = new Response(upstream.body, upstream);
+  response.headers.delete('set-cookie');
+  response.headers.set('cache-control', upstream.ok ? `public, max-age=${MONTH_S}, immutable` : 'no-store');
+  return response;
+}
+
+/** The tile index. Near the Worker's free limit, tiles go straight to their host instead. */
+async function tileIndex(request: Request, env: Env): Promise<Response> {
+  const res = await fetch(`${MAP_HOST}/planet`, { headers: UA, cf: { cacheTtl: 86400, cacheEverything: true } });
   if (!res.ok) return fail(502, 'Tile index unavailable');
-  return new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': DAY } });
+  const index = await res.json<{ tiles: string[] }>();
+  if (!(await directory(env).isLocked('worker_requests'))) {
+    const proxy = `${new URL(request.url).origin}/api/map/file`;
+    index.tiles = index.tiles.map((url) => url.replace(MAP_HOST, proxy));
+  }
+  return json(index, 200, { 'cache-control': 'public, max-age=3600' });
 }
 
 export async function placesRoutes(request: Request, env: Env, path: string[]): Promise<Response | undefined> {
   const [, resource, action] = path;
-  if (resource === 'map' && action === 'tiles.json') return tileIndex();
+  if (resource === 'map' && action === 'index.json') return tileIndex(request, env);
   if (resource !== 'route' && resource !== 'places') return undefined;
   // Riders only: these lean on free public services, whose limits must not be spent by strangers.
   const user = await currentUser(request, env);

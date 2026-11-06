@@ -29,9 +29,11 @@ Tests: `unit` (126), `call` (two real Chrome browsers over WebRTC), `webkit` (Sa
 
 | Requirement | Status | Proof or note |
 |---|---|---|
-| Mappls in-app map | Needs key | Key is valid, but Mappls refuses it until Map SDK access is enabled for the app. Falls back automatically meanwhile |
+| Mappls in-app map | Needs Mappls access | Mappls refused the app access when last tested, so riders get the backup map. Settings now shows Mappls' own reason. Real Mappls map never yet drawn |
 | Button hands off to Google Maps | Done | call: two-wheeler navigation link. Free, no key |
 | Ride planner: total ride, stops, group sync | Done | call: name, time, stops, order reach other riders |
+| Rearrange and remove stops | Done | stops: drag handle and remove on every row, real touch drag, Safari engine, 14-stop list, reach other riders. A finger on a real iPhone is untested |
+| Stop types on every screen | Done | stops: all 7 show from 360 px phones to 1920 px desktops |
 | Search for places | Done | live: free search works |
 | Search from Google Maps | Done | Search on Google Maps button, then share or paste back |
 | Google search inside the app | Needs key | Built and unit-tested. Google requires a billing account, so this is the owner's choice |
@@ -82,6 +84,7 @@ Tests: `unit` (126), `call` (two real Chrome browsers over WebRTC), `webkit` (Sa
 | iPhone with the screen off, native app | Needs device | Compiles in CI and is published. Free install through SideStore, refreshed within 7 days. Never run on a real iPhone |
 | Nearby permission, Android | Done | android: asked when joining the call, so it is settled before the internet is lost |
 | Nearby voice, Android | Needs device | Built. Starts on Play services and voice path tested, but the radio link needs two phones |
+| Nearby mesh, 8 to 10 riders | Needs device | Built. Routing and the real link code pass on simulated radios (groups, lines, splits, dropouts). Real radios need several phones |
 | Nearby, web | Not possible | Browsers have no such feature on any phone. Settings says so plainly |
 | Nearby, iPhone app | Not possible today | Google's version is unproven between iPhone and Android; Apple's only links iPhones |
 | Low battery | Needs device | Designed for it throughout. Only a real ride can measure it |

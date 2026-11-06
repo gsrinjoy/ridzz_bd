@@ -46,23 +46,54 @@ function riderHtml(r: RiderPin): string {
 
 const stopHtml = (s: StopPin) => `<div class="stop-pin num" title="${escapeHtml(s.name)}">${s.index}</div>`;
 
-/** Injects the SDK script once. Rejects on a bad key, because Mappls answers those with an error status. */
+/**
+ * Turns Mappls' answer into something the owner can act on. Only known fields are
+ * shown, because some of its error text repeats the key back.
+ */
+export function explainRefusal(status: number, body: string): string {
+  if (status >= 200 && status < 300) return 'Mappls answered normally, but its script was blocked on this device.';
+  let answer: { error?: unknown; error_code?: unknown; error_description?: unknown } = {};
+  try {
+    answer = JSON.parse(body) as typeof answer;
+  } catch {
+    // Not every failure comes from Mappls itself, so plain text is possible here.
+  }
+  if (answer.error_code === 'invalid_token') return 'Mappls does not recognise this key. MAPPLS_KEY must be the Static Key from the Mappls console.';
+  if (answer.error_code === 'ASSET_ACCESS_DENIED') {
+    return `Mappls accepts this key but has not given this app access to the web map. It said: ${String(answer.error_description)}`;
+  }
+  if (typeof answer.error_code === 'string') return `Mappls refused the map: ${answer.error_code}.`;
+  return `Mappls answered with error ${status}.`;
+}
+
+/** A script tag only says that it failed, so ask again to read Mappls' reason. */
+async function askWhyRefused(url: string): Promise<string> {
+  try {
+    const response = await fetch(url);
+    return explainRefusal(response.status, await response.text());
+  } catch {
+    return 'Could not reach Mappls from this device.';
+  }
+}
+
+/** Injects the SDK script once. Rejects with Mappls' own reason, shown in Settings. */
 export function loadMapplsSdk(key: string): Promise<MapplsSdk> {
   const w = window as unknown as { mappls?: MapplsSdk };
   if (w.mappls?.Map) return Promise.resolve(w.mappls);
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    const timer = setTimeout(() => reject(new Error('Mappls SDK timed out')), SDK_TIMEOUT_MS);
+    const timer = setTimeout(() => reject(new Error('Mappls took too long to load on this connection.')), SDK_TIMEOUT_MS);
     script.src = `https://sdk.mappls.com/map/sdk/web?v=3.0&access_token=${encodeURIComponent(key)}`;
+    const url = script.src;
     script.async = true;
     script.onerror = () => {
       clearTimeout(timer);
-      reject(new Error('Mappls SDK refused to load'));
+      void askWhyRefused(url).then((reason) => reject(new Error(reason)));
     };
     script.onload = () => {
       clearTimeout(timer);
       if (w.mappls?.Map) resolve(w.mappls);
-      else reject(new Error('Mappls SDK loaded without a map'));
+      else reject(new Error('Mappls loaded without a map.'));
     };
     document.head.append(script);
   });
@@ -186,7 +217,7 @@ export function createMapplsEngine(sdk: MapplsSdk, containerId: string, start: L
   };
 
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Mappls map did not load')), LOAD_TIMEOUT_MS);
+    const timer = setTimeout(() => reject(new Error('Mappls started but its map did not finish loading.')), LOAD_TIMEOUT_MS);
     map.addListener('load', () => {
       clearTimeout(timer);
       pickDarkStyle();

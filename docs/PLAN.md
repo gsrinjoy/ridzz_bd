@@ -65,6 +65,7 @@ For one 9-hour ride with 10 riders:
 |---|---|---|---|
 | Durable Object time | 13,000 GB-s a day | About 4,150 | 32% of a day |
 | Durable Object requests | 100,000 a day | About 3,300 (socket messages bill at 20:1) | 3% of a day |
+| Map files through the Worker | 100,000 Worker requests a day | About 20,000 (estimate: 10 riders, new tiles as they move, browsers cache the rest) | 20% of a day. Near the limit, tiles go direct to their host |
 | Rows written | 100,000 a day | About 5,400 (positions persist once a minute) | 5% of a day |
 | Voice relay data, typical | 1,000 GB a month | About 0.2 GB, one rider talking 20% of the time | 0.02% of a month |
 | Voice relay data, worst case | 1,000 GB a month | About 8.7 GB, all ten on open mic for 9 hours | 0.9% of a month |
@@ -82,6 +83,27 @@ A call has three paths, and moves between them with no taps:
 | 3. Nearby (Android only) | Free, always | Internet lost for 6 seconds | Riders in radio range only |
 
 Moving from 1 to 2 is driven by the server, which tells every rider on the ride. It is proven on the live site. Moving to 3 cannot be: with no internet the server cannot reach the phone, so the phone decides for itself. Near a daily limit, eco mode slows location updates so the ride can finish. If a daily Durable Object limit is hit anyway, voice over the relay keeps running, because it does not pass through them; location sharing stops until the reset at 00:00 UTC.
+
+## The local mesh
+
+Google's Nearby Connections links two phones and does no routing. Its engineers put the practical limit at 3 or 4 radio links per phone, and a Bluetooth helmet takes one. So a group of 8 cannot simply all connect to each other. Slipstream builds its own mesh on top:
+
+| Problem | How it is handled |
+|---|---|
+| Too few links for everyone to connect | Each phone keeps 3 links. Riders reach the rest through neighbours |
+| The group splits into islands | The 4th link is reserved. After 8 settled seconds, a phone that finds a rider it cannot reach spends it to join the two parts |
+| Riders strung out in a line | Voice hops rider to rider, up to 9 hops, enough for 10 riders in a single line |
+| Packets looping | Each carries a sender and number, and every phone passes a packet on once |
+| Scanning disturbs links and drains power | It stops 30 seconds after the mesh settles, and restarts if the mesh changes |
+| Two settled groups riding back together | Each phone takes one 8-second look every 2 minutes, at its own moment, so the halves find each other |
+| Only one rider loses signal | Riders within 1 km of a dropped rider start listening too, because both sides must be scanning |
+| Hearing someone twice | While a rider is online, their Nearby audio is ignored |
+
+Each hop adds delay, so a rider at the far end of a long line hears speech later than a neighbour. Radio range is about 100 m in the open by Google's figure, and less on real bikes, so a stretched-out group may not stay connected. Nearby is a safety net for dead zones, not a replacement for the relay.
+
+A rider who loses signal hears only riders the mesh can reach. Voice does not cross from the internet call into the mesh, so anyone outside radio range stays silent to them until they are back online.
+
+The routing runs against 8 and 10 simulated riders in `tests/unit/mesh.test.ts`, including random arrival orders and random road spacing. `tests/unit/nearbyLink.test.ts` runs the real link code on 8 pretend radios. **The radio itself has not been tested on real phones.**
 
 ## Measured results
 

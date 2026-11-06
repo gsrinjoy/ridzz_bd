@@ -4,6 +4,7 @@ import android.Manifest;
 import android.os.Build;
 import android.util.Base64;
 import androidx.annotation.NonNull;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.PermissionState;
 import com.getcapacitor.Plugin;
@@ -29,8 +30,8 @@ import com.google.android.gms.nearby.connection.PayloadCallback;
 import com.google.android.gms.nearby.connection.PayloadTransferUpdate;
 import com.google.android.gms.nearby.connection.Strategy;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
  * Phone-to-phone link over Bluetooth and Wi-Fi through Google Nearby Connections.
@@ -49,8 +50,11 @@ import java.util.Set;
 public class NearbyLinkPlugin extends Plugin {
 
     private static final Strategy STRATEGY = Strategy.P2P_CLUSTER;
+    /** Phones hold about 3 or 4 radio links in practice. The JavaScript side picks which. */
+    private static final int MAX_LINKS = 4;
 
-    private final Set<String> peers = new HashSet<>();
+    /** Radio callbacks change this while the plugin thread is sending, many times a second. */
+    private final Set<String> peers = new CopyOnWriteArraySet<>();
     private ConnectionsClient client;
     private String serviceId;
     private String localName;
@@ -144,8 +148,10 @@ public class NearbyLinkPlugin extends Plugin {
     private final EndpointDiscoveryCallback discovery = new EndpointDiscoveryCallback() {
         @Override
         public void onEndpointFound(@NonNull String endpointId, @NonNull DiscoveredEndpointInfo info) {
-            if (peers.contains(endpointId) || client == null) return;
-            client.requestConnection(localName, endpointId, lifecycle);
+            JSObject event = new JSObject();
+            event.put("endpointId", endpointId);
+            event.put("name", info.getEndpointName());
+            notifyListeners("found", event);
         }
 
         @Override
@@ -155,7 +161,9 @@ public class NearbyLinkPlugin extends Plugin {
     private final ConnectionLifecycleCallback lifecycle = new ConnectionLifecycleCallback() {
         @Override
         public void onConnectionInitiated(@NonNull String endpointId, @NonNull ConnectionInfo info) {
-            if (client != null) client.acceptConnection(endpointId, payloads);
+            if (client == null) return;
+            if (peers.size() >= MAX_LINKS) client.rejectConnection(endpointId);
+            else client.acceptConnection(endpointId, payloads);
         }
 
         @Override
@@ -179,6 +187,7 @@ public class NearbyLinkPlugin extends Plugin {
             byte[] bytes = payload.asBytes();
             if (bytes == null) return;
             JSObject event = new JSObject();
+            event.put("from", endpointId);
             event.put("data", Base64.encodeToString(bytes, Base64.NO_WRAP));
             notifyListeners("data", event);
         }
@@ -188,16 +197,44 @@ public class NearbyLinkPlugin extends Plugin {
     };
 
     private void announcePeers() {
+        JSArray endpoints = new JSArray();
+        for (String peer : peers) endpoints.put(peer);
         JSObject event = new JSObject();
-        event.put("count", peers.size());
+        event.put("endpoints", endpoints);
         notifyListeners("peers", event);
     }
 
     @PluginMethod
+    public void connect(PluginCall call) {
+        String endpointId = call.getString("endpointId", "");
+        if (client != null && !peers.contains(endpointId) && peers.size() < MAX_LINKS) {
+            client.requestConnection(localName, endpointId, lifecycle);
+        }
+        call.resolve();
+    }
+
+    /** Scanning is heavy radio work that can break the links in use, so it runs only when needed. */
+    @PluginMethod
+    public void setDiscovery(PluginCall call) {
+        if (client == null) {
+            call.resolve();
+            return;
+        }
+        if (call.getBoolean("on", false)) {
+            client.startDiscovery(serviceId, discovery, new DiscoveryOptions.Builder().setStrategy(STRATEGY).build());
+        } else {
+            client.stopDiscovery();
+        }
+        call.resolve();
+    }
+
+    @PluginMethod
     public void send(PluginCall call) {
-        if (client != null && !peers.isEmpty()) {
+        ArrayList<String> targets = new ArrayList<>(peers);
+        targets.remove(call.getString("except", "")); // Not back to the rider it came from.
+        if (client != null && !targets.isEmpty()) {
             byte[] bytes = Base64.decode(call.getString("data", ""), Base64.NO_WRAP);
-            client.sendPayload(new ArrayList<>(peers), Payload.fromBytes(bytes));
+            client.sendPayload(targets, Payload.fromBytes(bytes));
         }
         call.resolve();
     }

@@ -22,7 +22,7 @@ check((await fetch(`${BASE}/manifest.webmanifest`)).ok, 'the web app manifest is
 const deep = await fetch(`${BASE}/r/ABC234`, { headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate' } });
 check(deep.ok && (await deep.text()).includes('id="app"'), 'invite links open the app');
 
-const tiles = await api('/api/map/tiles.json');
+const tiles = await api('/api/map/index.json');
 check(tiles.status === 200 && !!tiles.data?.tiles, 'the map tile index works through the Worker');
 const headers0 = home.headers;
 check(/frame-ancestors 'none'/.test(headers0.get('content-security-policy') ?? ''), 'the app sends a Content Security Policy');

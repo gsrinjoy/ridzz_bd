@@ -118,6 +118,8 @@ export const ecoMode = signal(false);
 export const nearbyAllowed = signal<boolean | null>(null);
 export const nearbyPeers = signal<number | null>(null);
 export const mapProvider = signal<'mappls' | 'backup' | null>(null);
+/** Why Mappls is not in use, so the owner can see it without developer tools. */
+export const mapProblem = signal<string | null>(null);
 export const mapReady = signal(false);
 export const rideMode = signal(false);
 export const incomingAlert = signal<{ id: string; name: string; kind: AlertKind; pos?: Position; at: number } | null>(null);

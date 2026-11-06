@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { distanceM, formatDistance, type LatLng } from '../../../shared/geo';
 import { directionsUrl, extractLink, googleSearchUrl, isShortMapsLink, parseMapsLink, routeUrl } from '../../../shared/mapsLink';
-import type { PlaceHit, Stop, StopKind } from '../../../shared/protocol';
+import type { ClientMessage, PlaceHit, Stop, StopKind } from '../../../shared/protocol';
 import { send } from '../../app/session';
-import { droppedPin, isAndroidApp, isIos, myPosition, pendingShare, reachedStops, ride, route, selectedStopId, stops } from '../../app/store';
-import { ArrowDown, ArrowUp, Check, Navigate, Trash } from '../../ui/icons';
+import { droppedPin, isAndroidApp, isIos, link, myPosition, pendingShare, reachedStops, ride, route, selectedStopId, stops } from '../../app/store';
+import { ArrowDown, ArrowUp, Check, Grip, Navigate, Trash } from '../../ui/icons';
 import { resolveLink, searchPlaces } from '../ride/api';
+import { moved, slide } from './reorder';
+import { useDragOrder } from './useDragOrder';
 
 const KINDS: { kind: StopKind; label: string }[] = [
   { kind: 'start', label: 'Start' },
@@ -97,8 +99,36 @@ function Summary() {
   );
 }
 
-function StopItem({ stop, index, total }: { stop: Stop; index: number; total: number }) {
+/** Shown at once, so a dropped row never jumps back while the server answers. Offline nothing is saved, so nothing moves. */
+function changeStops(next: Stop[], msg: ClientMessage) {
+  if (link.peek() === 'live') stops.value = next;
+  send(msg);
+}
+
+function moveStop(id: string, to: number) {
+  const list = stops.value;
+  const from = list.findIndex((s) => s.id === id);
+  if (from < 0 || from === to) return;
+  const next = moved(list, from, Math.min(to, list.length - 1));
+  changeStops(next, { t: 'stop.order', ids: next.map((s) => s.id) });
+}
+
+/** Removing changes the plan for everyone, so a stray tap in gloves only asks. */
+const REMOVE_ARMED_MS = 3000;
+
+interface StopItemProps {
+  stop: Stop;
+  index: number;
+  total: number;
+  lifted: boolean;
+  shift: number;
+  grip: Record<string, (e: PointerEvent) => void>;
+}
+
+function StopItem({ stop, index, total, lifted, shift, grip }: StopItemProps) {
   const open = selectedStopId.value === stop.id;
+  const [armed, setArmed] = useState(false);
+  const disarm = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const here = myPosition.value;
   const leg = index > 0 ? route.value?.legs[index - 1] : undefined;
   const ref = useRef<HTMLDivElement>(null);
@@ -107,15 +137,23 @@ function StopItem({ stop, index, total }: { stop: Stop; index: number; total: nu
     if (open) ref.current?.scrollIntoView({ block: 'nearest' });
   }, [open]);
 
-  function move(by: number) {
-    const ids = stops.value.map((s) => s.id);
-    ids.splice(index, 1);
-    ids.splice(index + by, 0, stop.id);
-    send({ t: 'stop.order', ids });
+  useEffect(() => () => clearTimeout(disarm.current), []);
+
+  function remove() {
+    clearTimeout(disarm.current);
+    if (!armed) {
+      setArmed(true);
+      disarm.current = setTimeout(() => setArmed(false), REMOVE_ARMED_MS);
+      return;
+    }
+    if (open) selectedStopId.value = null;
+    changeStops(stops.value.filter((s) => s.id !== stop.id), { t: 'stop.remove', id: stop.id });
   }
 
   return (
-    <div ref={ref} class={`stop ${open ? 'open' : ''}`}>
+    <div ref={ref} class={`stop ${open ? 'open' : ''} ${lifted ? 'lifted' : ''}`} style={shift ? { transform: `translateY(${shift}px)` } : undefined}>
+      <div class="stop-line">
+      {total > 1 && <span class="stop-grip" role="img" aria-label={`Drag to reorder ${stop.name}`} {...grip}><Grip /></span>}
       <button class="stop-row" aria-expanded={open} onClick={() => (selectedStopId.value = open ? null : stop.id)}>
         <span class={`stop-index num ${reachedStops.value.includes(stop.id) ? 'reached' : ''}`}>{reachedStops.value.includes(stop.id) ? <Check /> : index + 1}</span>
         <span class="row-main">
@@ -124,6 +162,10 @@ function StopItem({ stop, index, total }: { stop: Stop; index: number; total: nu
         </span>
         {leg && <span class="leg num">+{formatDistance(leg.distanceM)}</span>}
       </button>
+      <button class={`stop-remove ${armed ? 'armed' : ''}`} aria-label={armed ? `Tap again to remove ${stop.name}` : `Remove ${stop.name}`} onClick={remove}>
+        {armed ? 'Remove?' : <Trash />}
+      </button>
+      </div>
       {open && (
         <div class="stop-tools">
           <a class="btn primary block" href={directionsUrl(stop)} target="_blank" rel="noopener">
@@ -131,12 +173,30 @@ function StopItem({ stop, index, total }: { stop: Stop; index: number; total: nu
           </a>
           {isIos() && <span class="note">Voice pauses while you are out of this app.</span>}
           <div class="stop-moves">
-            <button class="icon-btn" aria-label={`Move ${stop.name} earlier`} disabled={index === 0} onClick={() => move(-1)}><ArrowUp /></button>
-            <button class="icon-btn" aria-label={`Move ${stop.name} later`} disabled={index === total - 1} onClick={() => move(1)}><ArrowDown /></button>
-            <button class="icon-btn" aria-label={`Remove ${stop.name}`} onClick={() => send({ t: 'stop.remove', id: stop.id })}><Trash /></button>
+            <button class="icon-btn" aria-label={`Move ${stop.name} earlier`} disabled={index === 0} onClick={() => moveStop(stop.id, index - 1)}><ArrowUp /></button>
+            <button class="icon-btn" aria-label={`Move ${stop.name} later`} disabled={index === total - 1} onClick={() => moveStop(stop.id, index + 1)}><ArrowDown /></button>
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function Timeline({ list }: { list: Stop[] }) {
+  const { drag, grip } = useDragOrder(moveStop);
+  return (
+    <div class={`timeline ${drag ? 'dragging' : ''}`}>
+      {list.map((s, i) => (
+        <StopItem
+          key={s.id}
+          stop={s}
+          index={i}
+          total={list.length}
+          lifted={drag?.from === i}
+          shift={!drag ? 0 : drag.from === i ? drag.dy : slide(i, drag.from, drag.to, drag.height)}
+          grip={grip(s.id, i)}
+        />
+      ))}
     </div>
   );
 }
@@ -260,11 +320,7 @@ export function PlanPanel() {
         </div>
       )}
 
-      {list.length > 0 && (
-        <div class="timeline">
-          {list.map((s, i) => <StopItem key={s.id} stop={s} index={i} total={list.length} />)}
-        </div>
-      )}
+      {list.length > 0 && <Timeline list={list} />}
 
       {!list.length && !hits.length && !pin && (
         <p class="note">Search for where the ride starts, then add fuel, food and the finish. Long-pressing the map works too. Everyone on the ride sees the plan the moment you change it.</p>

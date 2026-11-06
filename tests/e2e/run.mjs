@@ -156,6 +156,7 @@ const open = async (browser, gps) => {
   page.on('pageerror', (e) => console.log('  page error:', e.message));
   page.on('console', (m) => {
     if (/Content Security Policy/i.test(m.text())) console.log(`FAIL  blocked by CSP: ${m.text().slice(0, 150)}`);
+    if (m.type() === 'warning' || m.type() === 'error') console.log(`  console ${m.type()}: ${m.text().slice(0, 160)}`);
   });
   await page.goto(BASE);
   return { context, page };
@@ -226,6 +227,15 @@ try {
   await b.page.click('text=Join the call');
   const up = await waitFor(async () => (await stats(a.page)).states.includes('connected'), 'WebRTC connected', 20000);
   check(up, 'voice link connected between the two browsers');
+  if (!up) {
+    for (const [name, rider] of [['Asha', a], ['Ben', b]]) {
+      const state = await rider.page.evaluate(() => ({
+        pcs: window.__pcs.map((p) => [p.connectionState, p.signalingState, p.iceConnectionState, p.iceGatheringState]),
+        text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 220),
+      }));
+      console.log(`INFO  ${name}: ${JSON.stringify(state)}`);
+    }
+  }
   const toneSeq = (p) => p.evaluate(() => window.__tones.join(' '));
   check((await toneSeq(a.page)).startsWith('523 784'), 'joining the call plays the rising join cue', await toneSeq(a.page));
   check((await toneSeq(a.page)).includes('659 880'), 'a rider who joins later is announced to the first rider');
@@ -242,8 +252,9 @@ try {
   check((await b.page.locator('.invite-qr svg').count()) === 1, 'invite card has a QR code');
   check((await b.page.locator('a:has-text("WhatsApp")').getAttribute('href')).startsWith('https://wa.me/?text='), 'invite card shares to WhatsApp');
   await b.page.click('text=Invite riders');
+  // Speed is checked above: while a rider talks, the row shows that in its place.
   const row = await b.page.locator('.row:has-text("Asha")').innerText();
-  check(/km\/h/.test(row) && /km|m/.test(row), 'Ben sees Asha speed and distance', row.replace(/\n/g, ' '));
+  check(/\d\s*k?m\b/.test(row), 'Ben sees how far away Asha is', row.replace(/\n/g, ' '));
 
   await b.page.click('.row:has-text("Asha") .row-tap');
   const href = await b.page.locator('a:has-text("Directions to Asha")').getAttribute('href');

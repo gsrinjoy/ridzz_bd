@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { endRide, leaveRide, setMeters, signOut } from '../../app/session';
-import { account, canControl, isAndroidApp, mapProvider, nearbyAllowed, nearbyPeers, meter, phase, prefs, rideMode, setPrefs, voice } from '../../app/store';
+import { account, canControl, isAndroidApp, mapProblem, mapProvider, nearbyAllowed, nearbyPeers, meter, phase, prefs, rideMode, setPrefs, voice } from '../../app/store';
 import { Moon } from '../../ui/icons';
 import { changePassword, updateProfile } from '../ride/api';
 import { setAccount } from '../../app/store';
@@ -104,7 +104,8 @@ export function SettingsPanel() {
         <input type="checkbox" checked={p.spokenAlerts} onChange={(e) => setPrefs({ spokenAlerts: e.currentTarget.checked })} />
       </label>
 
-      {mapProvider.value && <span class="note">Map: {mapProvider.value === 'mappls' ? 'Mappls' : 'backup map (Mappls key not set or unavailable)'}</span>}
+      {mapProvider.value && <span class="note">Map: {mapProvider.value === 'mappls' ? 'Mappls' : 'backup map'}</span>}
+      {mapProvider.value === 'backup' && mapProblem.value && <span class="note map-problem">{mapProblem.value}</span>}
 
       {isAndroidApp() ? (
         <>

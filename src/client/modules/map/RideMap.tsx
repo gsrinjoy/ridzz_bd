@@ -1,7 +1,7 @@
 import { effect } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import type { LatLng } from '../../../shared/geo';
-import { droppedPin, mapProvider, mapReady, myPosition, nextStop, phase, riders, route, selectedRiderId, selectedStopId, session, stops } from '../../app/store';
+import { droppedPin, mapProblem, mapProvider, mapReady, myPosition, nextStop, phase, riders, route, selectedRiderId, selectedStopId, session, stops } from '../../app/store';
 import { fetchConfig } from '../ride/api';
 import type { MapEngine, MapEvents, RiderPin } from './engine';
 import { createMapplsEngine, loadMapplsSdk } from './mapplsEngine';
@@ -22,9 +22,11 @@ async function openEngine(container: HTMLElement, events: MapEvents): Promise<Ma
   const start = myPosition.value;
   try {
     const { mapplsKey } = await fetchConfig();
+    mapProblem.value = mapplsKey ? null : 'No Mappls key is set on the server.';
     if (mapplsKey) return await createMapplsEngine(await loadMapplsSdk(mapplsKey), CONTAINER_ID, start, events);
   } catch (e) {
     console.warn('Mappls unavailable, using the backup map', e);
+    mapProblem.value = e instanceof Error ? e.message : String(e);
     container.replaceChildren();
   }
   const { createBackupEngine } = await import('./backupEngine');

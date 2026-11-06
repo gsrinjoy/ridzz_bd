@@ -30,7 +30,7 @@ async function rider(browser, name) {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['microphone', 'geolocation'] });
   await context.addInitScript(instrument);
   const page = await context.newPage();
-  const email = `${name}.${Date.now()}@test.example`;
+  const email = `${name.toLowerCase()}.${Date.now()}@test.example`;
   await page.goto(BASE);
   await page.click('text=Create an account');
   await page.fill('#name', name);

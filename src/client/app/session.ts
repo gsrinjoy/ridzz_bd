@@ -3,6 +3,8 @@ import { distanceM } from '../../shared/geo';
 import type { AlertKind, ClientMessage, LocTuple, Position, RideInfo, RidePhase, Rider, ServerMessage, VoiceConfig } from '../../shared/protocol';
 import { LocationTracker } from '../modules/location/tracker';
 import { NearbyLink, prepareNearby } from '../modules/nearby/link';
+import { decodeFrames, hashRider } from '../modules/nearby/packets';
+import { LocalLinkWatch } from '../modules/nearby/watch';
 import { LocalEncoder, LocalPlayer, localVoiceSupported } from '../modules/nearby/localVoice';
 import { RideShell } from '../modules/power/rideShell';
 import { ScreenWake } from '../modules/power/wakeLock';
@@ -53,12 +55,7 @@ export const send = (msg: ClientMessage) => {
   }
 };
 
-/** Scanning radios cost battery, so the link starts only after the internet has clearly gone. */
-const NEARBY_AFTER_MS = 6000;
-const NEARBY_LINGER_MS = 30_000;
-
 let nearby: NearbyLink | undefined;
-let nearbyTimer: ReturnType<typeof setTimeout> | undefined;
 let localEncoder: LocalEncoder | undefined;
 const localPlayers = new Map<number, LocalPlayer>();
 
@@ -69,15 +66,39 @@ function onNearbyControl(json: unknown): void {
   if (msg.t === 'alert') onMessage({ t: 'alert', id, kind: msg.kind, at: Date.now() });
 }
 
+/** Someone reachable both ways would be heard twice, so the internet path wins while it works. */
+function wantsLocalAudio(sender: number): boolean {
+  if (link.peek() !== 'live' || voice.peek().status === 'recovering') return true;
+  const rider = Object.values(riders.peek()).find((r) => hashRider(r.id) === sender);
+  return !rider?.online;
+}
+
 function onNearbyAudio(sender: number, packet: Uint8Array): void {
   const out = engine?.localOutput;
-  if (!out) return;
+  if (!out || !wantsLocalAudio(sender)) return;
   let player = localPlayers.get(sender);
   if (!player) {
     player = new LocalPlayer(out.ctx, out.destination);
     localPlayers.set(sender, player);
   }
-  player.push(packet);
+  for (const frame of decodeFrames(packet)) player.push(frame);
+}
+
+function attachLocalVoice(link: NearbyLink): void {
+  if (localEncoder || !engine || !localVoiceSupported()) return;
+  localEncoder = new LocalEncoder((data) => link.sendAudio(data));
+  engine.setLocalTap((samples) => localEncoder?.push(samples));
+}
+
+/** Within this distance a dropped rider may be in radio range, so it is worth listening for them. */
+const DROPPED_NEAR_M = 1000;
+
+/** Nearby needs both sides scanning, so riders with internet must listen for one who lost it. */
+function someoneDroppedNearby(): boolean {
+  const here = myPosition.value;
+  if (!here) return false;
+  const self = session.peek()?.riderId;
+  return Object.values(riders.value).some((r) => r.id !== self && !!r.voice && !r.online && !!r.pos && distanceM(here, r.pos) <= DROPPED_NEAR_M);
 }
 
 async function startNearby(): Promise<void> {
@@ -90,12 +111,9 @@ async function startNearby(): Promise<void> {
   });
   nearby = created;
   try {
-    await created.start(s.code, account.peek()?.name ?? 'Rider');
+    await created.start(s.code);
     nearbyPeers.value = 0;
-    if (localVoiceSupported() && engine) {
-      localEncoder = new LocalEncoder((data) => created.sendAudio(data));
-      engine.setLocalTap((samples) => localEncoder?.push(samples));
-    }
+    attachLocalVoice(created);
   } catch (e) {
     console.warn('nearby start', e);
     nearby = undefined;
@@ -113,11 +131,7 @@ function stopNearby(): void {
   nearbyPeers.value = null;
 }
 
-function watchInternet(healthy: boolean): void {
-  clearTimeout(nearbyTimer);
-  if (!healthy && !nearby) nearbyTimer = setTimeout(() => void startNearby(), NEARBY_AFTER_MS);
-  if (healthy && nearby) nearbyTimer = setTimeout(stopNearby, NEARBY_LINGER_MS);
-}
+const localLinkWatch = new LocalLinkWatch({ running: () => !!nearby, start: () => void startNearby(), stop: stopNearby });
 
 function wsUrl(s: Session): string {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -360,7 +374,8 @@ export function connect(s: Session): void {
     effect(() => {
       const healthy = link.value === 'live' && voice.value.status !== 'recovering';
       director?.setLink(healthy);
-      untracked(() => watchInternet(healthy));
+      const dropped = someoneDroppedNearby();
+      untracked(() => localLinkWatch.update(!healthy || dropped));
     }),
   );
 }
@@ -438,6 +453,7 @@ export async function startVoice(): Promise<void> {
     if (isNativeApp()) await startNativeRide();
     await created.start(ctx, prefs.value.talkMode, prefs.value.sensitivity, prefs.value.noiseFilter);
     created.setVolumes(prefs.value.volumes);
+    if (nearby) attachLocalVoice(nearby);
     voice.value = { ...voice.value, status: 'live', transport: config.mode, startedAt: Date.now() };
     director = new CueDirector(callCue);
     callCue('call-join');
@@ -466,7 +482,7 @@ async function startNativeRide(): Promise<void> {
 
 export function stopVoice(farewell?: Cue): void {
   stopNearby();
-  clearTimeout(nearbyTimer);
+  localLinkWatch.reset();
   if (farewell) callCue(farewell);
   director?.destroy();
   director = undefined;

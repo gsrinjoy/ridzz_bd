@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RiderPin } from '../../src/client/modules/map/engine';
-import { createMapplsEngine, type MapplsSdk } from '../../src/client/modules/map/mapplsEngine';
+import { createMapplsEngine, explainRefusal, type MapplsSdk } from '../../src/client/modules/map/mapplsEngine';
 
 // Pins this adapter to the calls in Mappls' V3 docs. Real behaviour needs a real key.
 function fakeSdk() {
@@ -125,9 +125,40 @@ describe('Mappls engine', () => {
   it('rejects when the map never loads, so the caller can fall back', async () => {
     vi.useFakeTimers();
     const pending = createMapplsEngine(f.sdk, 'map', null, events);
-    const check = expect(pending).rejects.toThrow('did not load');
+    const check = expect(pending).rejects.toThrow('did not finish loading');
     await vi.advanceTimersByTimeAsync(10_001);
     await check;
     vi.useRealTimers();
+  });
+});
+
+describe('why Mappls refused', () => {
+  // Real answers from sdk.mappls.com.
+  const denied = '{"responsecode":401,"error_description":"Api access denied : app1793965839458i98113197 , ast1566974119i1149949952","error_code":"ASSET_ACCESS_DENIED","error":"Api Access Denied"}';
+  const unknown = '{"responsecode":401,"error_description":"Token was not recognised : notARealKey123","error_code":"invalid_token","error":"Invalid Token"}';
+
+  it('says the key is wrong, without repeating it', () => {
+    const reason = explainRefusal(401, unknown);
+    expect(reason).toContain('Static Key');
+    expect(reason).not.toContain('notARealKey123');
+  });
+
+  it('says the key is fine but access is missing, with the ids Mappls support needs', () => {
+    const reason = explainRefusal(401, denied);
+    expect(reason).toContain('accepts this key');
+    expect(reason).toContain('ast1566974119i1149949952');
+  });
+
+  it('copes with codes it has not met, and with plain text', () => {
+    expect(explainRefusal(403, '{"error_code":"DOMAIN_NOT_ALLOWED"}')).toContain('DOMAIN_NOT_ALLOWED');
+    expect(explainRefusal(502, '<html>Bad gateway</html>')).toContain('502');
+  });
+
+  it('never repeats unknown error text, which can contain the key', () => {
+    expect(explainRefusal(401, '{"error_code":"OTHER","error_description":"bad token SECRETKEY"}')).not.toContain('SECRETKEY');
+  });
+
+  it('points at the device when Mappls itself answered fine', () => {
+    expect(explainRefusal(200, 'var mappls = {}')).toContain('blocked');
   });
 });
