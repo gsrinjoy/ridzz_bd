@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { AdminUser, FriendInfo, FriendRequest, FriendsView, RideInvite } from '../../../shared/protocol';
-import { BUDGETS, budgetState, periodKey, type BudgetView } from '../../../shared/budgets';
+import { BUDGETS, budgetState, periodKey, type BudgetView, type RidePolicy } from '../../../shared/budgets';
 import type { RideLog, RideSummary } from '../../../shared/stats';
 import type { Env } from '../../env';
 import { digest, DUMMY_HASH_INPUT, hashSecret, newRecoveryCode, newSessionToken, normaliseCode, verifySecret } from '../auth/passwords';
@@ -33,6 +33,8 @@ export type RideRow = {
 };
 
 const SESSION_MS = 60 * 24 * 3600_000;
+const OWNER_SESSION_MS = 12 * 3600_000;
+const OWNER_ID = 'owner';
 const SEEN_EVERY_MS = 5 * 60_000;
 
 const toFriend = (u: UserRow): FriendInfo => ({ id: u.id, name: u.name, color: u.color, friendCode: u.friend_code });
@@ -57,6 +59,7 @@ export class Directory extends DurableObject<Env> {
       CREATE TABLE IF NOT EXISTS invites (id TEXT PRIMARY KEY, from_id TEXT NOT NULL, to_id TEXT NOT NULL, code TEXT NOT NULL, UNIQUE (to_id, code));
       CREATE TABLE IF NOT EXISTS ride_logs (user_id TEXT NOT NULL, id TEXT NOT NULL, date TEXT NOT NULL, summary TEXT NOT NULL, detail TEXT NOT NULL, PRIMARY KEY (user_id, id));
       CREATE TABLE IF NOT EXISTS rides (code TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT NOT NULL, created_at INTEGER NOT NULL, last_active INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS usage (period TEXT NOT NULL, metric TEXT NOT NULL, value REAL NOT NULL, PRIMARY KEY (period, metric));
     `);
     this.migrate();
@@ -217,6 +220,66 @@ export class Directory extends DurableObject<Env> {
       const used = row?.value ?? 0;
       return { ...budget, used, state: budgetState(budget, used) };
     });
+  }
+
+  private setting(key: string): string | undefined {
+    return this.sql.exec<{ value: string }>('SELECT value FROM settings WHERE key = ?', key).toArray()[0]?.value;
+  }
+
+  /**
+   * The portal password replaces ADMIN_TOKEN, until ADMIN_TOKEN itself is changed
+   * with Wrangler. That is the way back in if it is forgotten: it needs the
+   * Cloudflare login, which an attacker holding only the old password lacks.
+   */
+  private async ownerHash(envToken: string): Promise<string | undefined> {
+    const hash = this.setting('owner_hash');
+    return hash && this.setting('owner_token') === (await digest(envToken)) ? hash : undefined;
+  }
+
+  async ownerLogin(password: string, envToken: string): Promise<string | null> {
+    const hash = await this.ownerHash(envToken);
+    const ok = hash ? await verifySecret(password, hash) : password === envToken;
+    if (!ok) return null;
+    const token = newSessionToken();
+    this.sql.exec('DELETE FROM sessions WHERE expires_at < ?', Date.now());
+    this.sql.exec('INSERT INTO sessions VALUES (?, ?, ?)', await digest(token), OWNER_ID, Date.now() + OWNER_SESSION_MS);
+    return token;
+  }
+
+  async isOwnerSession(token: string): Promise<boolean> {
+    const row = this.sql.exec<{ user_id: string; expires_at: number }>('SELECT user_id, expires_at FROM sessions WHERE token_hash = ?', await digest(token)).toArray()[0];
+    return row?.user_id === OWNER_ID && row.expires_at > Date.now();
+  }
+
+  /** Whether ADMIN_TOKEN still works as the password. It stops the moment a portal password is set. */
+  async tokenIsPassword(envToken: string): Promise<boolean> {
+    return !(await this.ownerHash(envToken));
+  }
+
+  async changeOwnerPassword(current: string, next: string, envToken: string): Promise<boolean> {
+    const hash = await this.ownerHash(envToken);
+    const ok = hash ? await verifySecret(current, hash) : current === envToken;
+    if (!ok) return false;
+    this.sql.exec('INSERT OR REPLACE INTO settings VALUES (?, ?), (?, ?)', 'owner_hash', await hashSecret(next), 'owner_token', await digest(envToken));
+    this.endSessions(OWNER_ID); // Anyone still signed in with the old password is out.
+    return true;
+  }
+
+  relayForcedOff(): boolean {
+    return this.sql.exec('SELECT 1 FROM settings WHERE key = ?', 'relay_off').toArray().length > 0;
+  }
+
+  setRelayForcedOff(off: boolean): void {
+    if (off) this.sql.exec('INSERT OR REPLACE INTO settings VALUES (?, ?)', 'relay_off', '1');
+    else this.sql.exec('DELETE FROM settings WHERE key = ?', 'relay_off');
+  }
+
+  policy(): RidePolicy {
+    const budgets = this.budgets();
+    return {
+      relay: !this.relayForcedOff() && !budgets.some((b) => b.metric === 'relay_gb' && b.state === 'locked'),
+      eco: budgets.some((b) => b.period === 'day' && !b.billable && (b.state === 'critical' || b.state === 'locked')),
+    };
   }
 
   isLocked(metric: string): boolean {

@@ -126,13 +126,30 @@ try {
     await fresh.clickText('Plan a new ride');
     await fresh.waitFor('.topbar');
     await wait(1500);
-    let focus = shell('dumpsys window | grep mCurrentFocus');
-    if (!/permissioncontroller/.test(focus)) {
-      await fresh.clickText('Join the call');
-      await wait(3000);
-      focus = shell('dumpsys window | grep mCurrentFocus');
-    }
-    check(/permissioncontroller/.test(focus), 'a fresh install asks for permission', focus.match(/[a-z.]*permissioncontroller[^ }]*/)?.[0] ?? focus.slice(0, 80));
+    // Answers each prompt as a rider would, noting what Android asked for.
+    const asked = [];
+    const answer = async () => {
+      for (let i = 0; i < 10; i++) {
+        const screen = shell('uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; cat /sdcard/ui.xml');
+        if (!/permissioncontroller/.test(screen)) return;
+        const question = screen.match(/text="([^"]*(?:Allow|allow)[^"]*\?)"/)?.[1];
+        if (question) asked.push(question.replace(/&lt;[^&]*&gt;/g, ''));
+        const match = screen.match(/text="(?:Allow|While using the app|Only this time)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
+        if (!match) return;
+        const [, x1, y1, x2, y2] = match.map(Number);
+        shell(`input tap ${(x1 + x2) >> 1} ${(y1 + y2) >> 1}`);
+        await wait(1800);
+      }
+    };
+    await answer();
+    check(asked.length > 0, 'a fresh install asks for permission', asked[0]?.slice(0, 70));
+    await fresh.clickText('Join the call');
+    await wait(3000);
+    await answer();
+    await wait(2000);
+    await answer();
+    console.log('INFO  Android asked:', asked.map((q) => q.slice(0, 44)).join(' | '));
+    check(asked.some((q) => /nearby/i.test(q)), 'joining the call asks for Nearby devices, while the rider can answer');
     fresh.close();
   }
 
@@ -179,6 +196,8 @@ try {
     }
   });
   check(await page.evaluate(() => !!window.Capacitor?.isPluginAvailable?.('NearbyLink')), 'the NearbyLink plugin is registered');
+  const prepared = await page.evaluate(() => window.Capacitor.Plugins.NearbyLink.prepare());
+  check(prepared.granted === true, 'Nearby permission is settled before the internet is ever lost');
   check(nearbyInfo.webcodecs === true, 'the Android WebView can encode Opus for local voice');
   check(nearbyInfo.started, 'Nearby starts on real Google Play services', nearbyInfo.error ?? 'advertising and discovery started');
 

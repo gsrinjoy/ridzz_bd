@@ -16,6 +16,7 @@ interface Peer {
 type Signal = { description: RTCSessionDescriptionInit } | { candidate: RTCIceCandidateInit };
 
 const RECOVERY_DELAY_MS = 2500;
+export const MESH_TRACK = 'mesh';
 
 /**
  * Direct rider-to-rider links, used when no relay is configured. When riders
@@ -42,12 +43,12 @@ export class MeshTransport implements VoiceTransport {
    */
   async start(track: MediaStreamTrack): Promise<void> {
     this.track = track;
-    this.publish({ sessionId: crypto.randomUUID(), trackName: 'mesh' });
+    this.publish({ sessionId: crypto.randomUUID(), trackName: MESH_TRACK });
     this.events.onHealth('live', 0);
   }
 
   syncRiders(riders: Rider[]): void {
-    const inCall = new Map(riders.filter((r) => r.voice && r.id !== this.selfId).map((r) => [r.id, r]));
+    const inCall = new Map(riders.filter((r) => r.voice?.trackName === MESH_TRACK && r.id !== this.selfId).map((r) => [r.id, r]));
     for (const [id, rider] of inCall) {
       const session = rider.voice?.sessionId;
       const peer = this.peers.get(id);

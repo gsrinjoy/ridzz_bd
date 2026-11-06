@@ -52,6 +52,9 @@ export class VoiceEngine {
   private volumes: Record<string, number> = {};
   private localTap: ((samples: Float32Array) => void) | undefined;
   private transport: VoiceTransport | undefined;
+  private track: MediaStreamTrack | undefined;
+  private sending = false;
+  private riders: Rider[] = [];
   private readonly remotes = new Map<string, RemoteAudio>();
 
   constructor(private readonly host: VoiceHost) {}
@@ -91,21 +94,43 @@ export class VoiceEngine {
     this.command({ type: 'sensitivity', value: sensitivity });
     this.command({ type: 'noiseFilter', filter: noiseFilter });
 
-    const track = out.stream.getAudioTracks()[0] as MediaStreamTrack;
+    this.track = out.stream.getAudioTracks()[0] as MediaStreamTrack;
+    this.transport = this.makeTransport(this.host.config);
+    // Silence until the gate opens: a closed gate must cost no radio time.
+    this.sending = mode === 'open';
+    this.transport.setSending(this.sending);
+    await this.transport.start(this.track);
+    await ctx.resume();
+  }
+
+  private makeTransport(config: VoiceConfig): VoiceTransport {
     const h = this.host;
     const events = {
       onRemoteStream: (id: string, stream: MediaStream) => this.attachRemote(id, stream),
       onRemoteGone: (id: string) => this.detachRemote(id),
       onHealth: h.onHealth,
     };
-    this.transport =
-      h.config.mode === 'sfu'
-        ? new SfuTransport(h.selfId, h.config.iceServers, h.sfuApi, h.publish, events)
-        : new MeshTransport(h.selfId, h.config.iceServers, h.sendSignal, h.publish, events);
-    // Silence until the gate opens: a closed gate must cost no radio time.
-    this.transport.setSending(mode === 'open');
-    await this.transport.start(track);
-    await ctx.resume();
+    return config.mode === 'sfu'
+      ? new SfuTransport(h.selfId, config.iceServers, h.sfuApi, h.publish, events)
+      : new MeshTransport(h.selfId, config.iceServers, h.sendSignal, h.publish, events);
+  }
+
+  get transportKind(): 'sfu' | 'mesh' | undefined {
+    return this.transport?.kind;
+  }
+
+  /**
+   * Moves a live call to another path, such as free direct links when the relay's
+   * allowance runs out. The mic chain is untouched, so only the link changes.
+   */
+  async switchTransport(config: VoiceConfig): Promise<void> {
+    if (!this.track || config.mode === this.transport?.kind) return;
+    this.transport?.close();
+    const next = this.makeTransport(config);
+    this.transport = next;
+    next.setSending(this.sending);
+    await next.start(this.track);
+    next.syncRiders(this.riders);
   }
 
   /** Hands processed mic audio to the nearby link. Off unless that link is in use. */
@@ -123,6 +148,7 @@ export class VoiceEngine {
     if (e.type === 'pcm') {
       this.localTap?.(e.samples);
     } else if (e.type === 'tx') {
+      this.sending = e.on;
       this.transport?.setSending(e.on);
       this.host.onTransmit(e.on);
     } else {
@@ -222,6 +248,7 @@ export class VoiceEngine {
   }
 
   syncRiders(riders: Rider[]): void {
+    this.riders = riders;
     this.transport?.syncRiders(riders);
   }
 

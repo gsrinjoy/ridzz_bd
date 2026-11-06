@@ -79,7 +79,7 @@ async function open(browser, name, gps) {
   const page = await context.newPage();
   page.on('console', (m) => {
     const t = m.text();
-    if (/Content Security Policy|mappls|Mappls|SFU|voice start|voice sig/i.test(t)) console.log(`  [${name} ${m.type()}] ${t.slice(0, 190)}`);
+    if (/Content Security Policy|SFU|voice start|voice sig/i.test(t)) console.log(`  [${name} ${m.type()}] ${t.slice(0, 190)}`);
   });
   page.on('pageerror', (e) => console.log(`  [${name} error] ${e.message.slice(0, 190)}`));
   const email = `${name.toLowerCase()}.${Date.now()}@test.example`;
@@ -128,8 +128,13 @@ try {
   check(sa.states.length === 1 && sb.states.length === 1, 'each rider uses one connection, the relay fans out', `${sa.states.length} and ${sb.states.length}`);
   await b.evaluate(() => (window.__recording.length = 0));
   const before = await stats(b);
+  const senderBefore = await stats(a);
   await wait(15000);
   const after = await stats(b);
+  const senderAfter = await stats(a);
+  console.log(`INFO  sender A sent ${senderAfter.sent - senderBefore.sent}, total ${senderAfter.sent}; B received total ${after.recv}; A received total ${senderAfter.recv}`);
+  console.log('INFO  transceivers A:', await a.evaluate(() => window.__pcs[0].getTransceivers().map((t) => `${t.mid}:${t.direction}/${t.currentDirection}`).join(' ')), '| B:', await b.evaluate(() => window.__pcs[0].getTransceivers().map((t) => `${t.mid}:${t.direction}/${t.currentDirection}`).join(' ')));
+  console.log('INFO  voice published A->B view:', await b.evaluate(() => document.querySelector('.talk-title')?.textContent ?? ''), '| A status:', await a.evaluate(() => document.querySelector('.talk-title')?.textContent ?? ''));
   check(after.recv - before.recv > 100, 'voice packets reach the other rider through the relay', `${after.recv - before.recv} in 15 s`);
   const rms = await b.evaluate(() => {
     let sum = 0;
@@ -141,6 +146,36 @@ try {
     return { rms: Math.sqrt(sum / Math.max(1, n)), seconds: n / 48000 };
   });
   check(rms.rms > 0.01, 'real audio arrives through the relay', `rms ${rms.rms.toFixed(3)}, ${rms.seconds.toFixed(1)} s`);
+  check(senderAfter.recv > 50, 'audio flows in both directions', `A received ${senderAfter.recv}`);
+  console.log('INFO  A screen:', (await a.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ').slice(0, 110));
+
+  // Failover: the relay goes away mid-call, as it would at the free limit.
+  const relay = (on) => admin('voice-relay', { method: 'POST', body: JSON.stringify({ on }) });
+  await relay(false);
+  await wait(9000);
+  await b.evaluate(() => (window.__recording.length = 0));
+  const openPcs = (p) => p.evaluate(() => window.__pcs.filter((x) => x.connectionState === 'connected').length);
+  const direct = await stats(b);
+  await wait(10000);
+  const directAfter = await stats(b);
+  const directAudio = await b.evaluate(() => {
+    let sum = 0;
+    let n = 0;
+    for (const c of window.__recording) for (const v of c) {
+      sum += v * v;
+      n++;
+    }
+    return Math.sqrt(sum / Math.max(1, n));
+  });
+  check(directAfter.candidate && !directAfter.candidate.includes('141.101'), 'the live call moved off the relay to a direct link', directAfter.candidate);
+  check(directAfter.recv - direct.recv > 100, 'voice keeps flowing after the failover, with no taps', `${directAfter.recv - direct.recv} packets in 10 s`);
+  check(directAudio > 0.01, 'real audio arrives over the direct link', `rms ${directAudio.toFixed(3)}, ${await openPcs(b)} link open`);
+  await relay(true);
+  await wait(9000);
+  const backOn = await stats(b);
+  await wait(6000);
+  const backOnAfter = await stats(b);
+  check(backOnAfter.recv > backOn.recv, 'the call moves back to the relay when it returns', backOnAfter.candidate);
 
   // Mappls
   await a.click('[role=tab]:has-text("Settings")');
@@ -152,8 +187,14 @@ try {
   await a.screenshot({ path: `${outDir}/live-map.png` });
   console.log('INFO  map elements:', await a.evaluate(() => JSON.stringify({ canvases: document.querySelectorAll('#ride-map canvas').length, mapplsGlobal: !!window.mappls, pins: document.querySelectorAll('.rider-pin').length })));
 } catch (e) {
-  check(false, `crashed: ${String(e.message).slice(0, 220)}`);
+  check(false, `crashed: ${String(e.message).replace(/\s+/g, ' ').slice(0, 300)}`);
+  for (const b of [browserA, browserB]) {
+    for (const c of b.contexts()) {
+      for (const p of c.pages()) console.log('INFO  screen:', (await p.evaluate(() => document.body.innerText)).replace(/\s+/g, ' ').slice(0, 200));
+    }
+  }
 } finally {
+  await admin('voice-relay', { method: 'POST', body: JSON.stringify({ on: true }) }); // Never leave it off.
   await browserA.close();
   await browserB.close();
   const users = await admin('users');

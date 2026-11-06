@@ -1,15 +1,19 @@
 import type { AdminOverview, AdminRide } from '../../../shared/protocol';
 import { fail, json, type Env } from '../../env';
+import { passwordProblem } from '../auth/passwords';
 import { clientIp } from '../auth/routes';
 import { directory } from '../directory/Directory';
 import { isRideCode, safeEqual } from '../rides/auth';
 import { room } from '../rides/routes';
 
-function isOwner(request: Request, env: Env): boolean {
+async function isOwner(request: Request, env: Env): Promise<boolean> {
   // No token configured means no owner access at all, never open access.
   if (!env.ADMIN_TOKEN) return false;
   const given = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
-  return safeEqual(given, env.ADMIN_TOKEN);
+  if (!given) return false;
+  const dir = directory(env);
+  if (await dir.isOwnerSession(given)) return true;
+  return safeEqual(given, env.ADMIN_TOKEN) && (await dir.tokenIsPassword(env.ADMIN_TOKEN));
 }
 
 async function allRides(env: Env): Promise<AdminRide[]> {
@@ -36,10 +40,30 @@ export async function adminRoutes(request: Request, env: Env, path: string[]): P
   const [, resource, area, id, action] = path;
   if (resource !== 'admin') return undefined;
   const dir = directory(env);
-  if (!isOwner(request, env)) {
+  const limited = () => fail(429, 'Too many attempts. Wait 15 minutes.');
+
+  if (area === 'login' && request.method === 'POST' && env.ADMIN_TOKEN) {
+    const { password } = await request.json<{ password?: string }>().catch(() => ({ password: '' }));
+    if (!(await dir.allow(`admin:${clientIp(request)}`, 10, 15 * 60_000))) return limited();
+    const token = await dir.ownerLogin(password ?? '', env.ADMIN_TOKEN);
+    if (!token) return fail(401, 'Wrong owner password');
+    await dir.clearAttempts(`admin:${clientIp(request)}`);
+    return json({ token });
+  }
+
+  if (!(await isOwner(request, env))) {
     // Failures alone are counted, so the portal's own polling never locks the owner out.
-    if (!(await dir.allow(`admin:${clientIp(request)}`, 10, 15 * 60_000))) return fail(429, 'Too many attempts. Wait 15 minutes.');
+    if (!(await dir.allow(`admin:${clientIp(request)}`, 10, 15 * 60_000))) return limited();
     return fail(401, 'Wrong owner password');
+  }
+
+  if (area === 'password' && request.method === 'POST') {
+    const { current, next } = await request.json<{ current?: string; next?: string }>();
+    const problem = passwordProblem(next);
+    if (problem) return fail(400, problem);
+    if (!(await dir.allow(`admin-password:${clientIp(request)}`, 5, 15 * 60_000))) return limited();
+    const changed = await dir.changeOwnerPassword(current ?? '', next as string, env.ADMIN_TOKEN as string);
+    return changed ? json({ ok: true }) : fail(400, 'Your current password is not right');
   }
 
   if (request.method === 'GET' && area === 'overview') {
@@ -54,8 +78,19 @@ export async function adminRoutes(request: Request, env: Env, path: string[]): P
       liveRides: rides.filter((r) => r.riders.some((x) => x.online)).length,
       ridersOnline: online.length,
       services: { voiceRelay: !!env.SFU_APP_ID && !!env.SFU_APP_SECRET, turn: !!env.TURN_KEY_ID, mappls: !!env.MAPPLS_KEY },
+      policy: await dir.policy(),
+      relayForcedOff: await dir.relayForcedOff(),
       budgets: await dir.budgets(),
     } satisfies AdminOverview);
+  }
+
+  if (request.method === 'POST' && area === 'voice-relay') {
+    const { on } = await request.json<{ on?: boolean }>();
+    await dir.setRelayForcedOff(on !== true);
+    // Riders on a call right now move over at once.
+    const rides = await dir.listRides();
+    await Promise.all(rides.map((r) => room(env, r.code).refreshPolicy()));
+    return json({ ok: true });
   }
 
   if (request.method === 'GET' && area === 'rides') return json(await allRides(env));

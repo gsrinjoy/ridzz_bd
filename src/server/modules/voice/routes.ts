@@ -7,8 +7,9 @@ const REALTIME = 'https://rtc.live.cloudflare.com/v1';
 const FALLBACK_ICE: RTCIceServerLike[] = [{ urls: 'stun:stun.cloudflare.com:3478' }];
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 
-async function iceServers(env: Env): Promise<RTCIceServerLike[]> {
-  if (!env.TURN_KEY_ID || !env.TURN_KEY_TOKEN) return FALLBACK_ICE;
+async function iceServers(env: Env, relayOn: boolean): Promise<RTCIceServerLike[]> {
+  // TURN shares the relay's allowance, so when that is off only free STUN is offered.
+  if (!relayOn || !env.TURN_KEY_ID || !env.TURN_KEY_TOKEN) return FALLBACK_ICE;
   const res = await fetch(`${REALTIME}/turn/keys/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
     method: 'POST',
     headers: { authorization: `Bearer ${env.TURN_KEY_TOKEN}`, 'content-type': 'application/json' },
@@ -41,9 +42,10 @@ export async function voiceRoutes(request: Request, env: Env, path: string[]): P
   }
 
   // Past the lock line, voice uses direct links, so relay data can never run into charges.
-  const sfuReady = !!env.SFU_APP_ID && !!env.SFU_APP_SECRET && !(await directory(env).isLocked('relay_gb'));
+  const relayOn = (await directory(env).policy()).relay;
+  const sfuReady = !!env.SFU_APP_ID && !!env.SFU_APP_SECRET && relayOn;
   if (action === 'config') {
-    return json({ mode: sfuReady ? 'sfu' : 'mesh', iceServers: await iceServers(env) } satisfies VoiceConfig);
+    return json({ mode: sfuReady ? 'sfu' : 'mesh', iceServers: await iceServers(env, relayOn) } satisfies VoiceConfig);
   }
 
   if (!sfuReady) return fail(503, 'Voice relay is not configured');

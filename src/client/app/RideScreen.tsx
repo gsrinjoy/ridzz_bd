@@ -11,7 +11,7 @@ import { CallDeck } from '../modules/voice/CallDeck';
 import { Crosshair, Group, Mic, MicOff, Moon, Navigate, Phone, Pin, Share, Sliders, UserPlus, Users } from '../ui/icons';
 import { Detail } from '../modules/stats/StatsScreen';
 import { leaveRide, startRide, startVoice } from './session';
-import { callPrompt, canControl, nearbyPeers, droppedPin, friends, hostName, nextStop, openPlanner, phase, ride, selectedStopId, summaryId, incomingAlert, isAndroidApp, isIos, link, locationError, mapReady, myPosition, otherRiders, pendingShare, prefs, pttHeld, rideMode, selectedRiderId, session, setPrefs, stops, transmitting, voice } from './store';
+import { isNativeApp, callPrompt, canControl, nearbyPeers, droppedPin, friends, hostName, nextStop, openPlanner, phase, ride, selectedStopId, summaryId, incomingAlert, isAndroidApp, isIos, link, locationError, mapReady, myPosition, otherRiders, pendingShare, prefs, pttHeld, rideMode, selectedRiderId, session, setPrefs, stops, transmitting, voice } from './store';
 
 type Tab = 'call' | 'riders' | 'plan' | 'friends' | 'settings';
 
@@ -172,6 +172,9 @@ function TalkBar() {
   );
 }
 
+/** After this long untouched, ride mode goes fully black. */
+const POCKET_AFTER_MS = 10_000;
+
 function RideMode() {
   const air = transmitting.value;
   const mode = prefs.value.talkMode;
@@ -180,14 +183,34 @@ function RideMode() {
   const next = stops.value[0];
   const healthy = link.value === 'live' && voice.value.status === 'live';
   const hold = mode === 'ptt' ? holdHandlers() : {};
+  const [pocket, setPocket] = useState(false);
+  const idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Black pixels are off on OLED phones, so this is the closest a web app can get
+  // to a locked screen: it stays open, so the call and GPS keep running.
+  const wake = () => {
+    setPocket(false);
+    clearTimeout(idle.current);
+    if (mode !== 'ptt') idle.current = setTimeout(() => setPocket(true), POCKET_AFTER_MS);
+  };
+  useEffect(() => {
+    wake();
+    return () => clearTimeout(idle.current);
+  }, [mode]);
+
+  if (pocket) return <button class="ridemode pocket" aria-label="Wake the screen" onClick={wake} />;
+
   return (
-    <div class="ridemode">
+    <div class="ridemode" onPointerDown={wake}>
       <button class="ridemode-main" {...hold}>
         <span class={`ridemode-status ${air ? 'air' : ''}`}>
           {!healthy ? 'Reconnecting' : air ? 'On air' : mode === 'ptt' ? 'Hold to talk' : mode === 'mute' ? 'Muted' : 'Listening'}
         </span>
         <span class="ridemode-who">{talker ? `${talker.name} is talking` : ''}</span>
       </button>
+      {isIos() && !isNativeApp() && (
+        <p class="ridemode-tip">Don't lock the phone. This goes fully black by itself, and the call keeps running. For a pocket, triple-click the side button to start Guided Access, which turns touch off.</p>
+      )}
       <div class="ridemode-foot">
         <span class="num">{next && here ? `${next.name} · ${formatDistance(distanceM(here, next))}` : `${otherRiders.value.filter((r) => r.online).length + 1} online`}</span>
         <button class="btn" onClick={() => (rideMode.value = false)}>Map</button>
@@ -216,8 +239,8 @@ function AlertToast() {
 function Banner() {
   const v = voice.value;
   if (locationError.value) return <div class="banner" role="status">{locationError.value}</div>;
-  if (!isAndroidApp() && isIos() && v.status === 'live') {
-    return <div class="banner" role="status">iPhone: keep this screen open. Locking it stops voice and location.</div>;
+  if (!isNativeApp() && isIos() && v.status === 'live') {
+    return <button class="banner" onClick={() => (rideMode.value = true)}>iPhone: don't lock the phone, it stops voice. Tap for Ride mode instead.</button>;
   }
   return null;
 }

@@ -65,6 +65,13 @@ function instrument({ lat, lon, kmh }) {
       });
     }
   };
+  window.__gains = [];
+  const nativeGain = AudioContext.prototype.createGain;
+  AudioContext.prototype.createGain = function () {
+    const g = nativeGain.call(this);
+    window.__gains.push(g);
+    return g;
+  };
   window.__tones = [];
   const nativeOsc = AudioContext.prototype.createOscillator;
   AudioContext.prototype.createOscillator = function () {
@@ -265,12 +272,31 @@ try {
   // Mute for me only: Ben stops hearing Asha, Asha keeps sending, and the server never knows.
   await b.page.click('[aria-label="Mute Asha for you"]');
   check((await b.page.locator('.call-row:has-text("Asha") >> text=Muted for you only').count()) === 1, 'muting a rider is labelled as local');
+  await new Promise((r) => setTimeout(r, 300));
+  check(await b.page.evaluate(() => window.__gains.some((g) => g.gain.value === 0)), 'muting a rider really silences their audio on this phone');
   const sentBefore = (await stats(a.page)).sent;
   await new Promise((r) => setTimeout(r, 3000));
   check((await stats(a.page)).sent > sentBefore, 'a locally muted rider still transmits to everyone else');
   const stored = await b.page.evaluate(() => JSON.parse(localStorage.getItem('slipstream.prefs')).volumes);
   check(Object.values(stored).includes(0), 'the mute is stored on this phone only');
   await b.page.click('[aria-label="Unmute Asha for you"]');
+
+  // Hold to talk must really gate the mic, not just change a label.
+  await a.page.click('[role=tab]:has-text("Call")').catch(() => undefined);
+  await a.page.click('.seg button:has-text("Hold")');
+  await new Promise((r) => setTimeout(r, 1200));
+  const idleSent = (await stats(a.page)).sent;
+  await new Promise((r) => setTimeout(r, 1500));
+  check((await stats(a.page)).sent - idleSent < 6, 'hold-to-talk sends nothing until held');
+  const hold = await a.page.locator('.hold').boundingBox();
+  await a.page.mouse.move(hold.x + hold.width / 2, hold.y + hold.height / 2);
+  await a.page.mouse.down();
+  await new Promise((r) => setTimeout(r, 900));
+  const heldFrom = (await stats(a.page)).sent;
+  await new Promise((r) => setTimeout(r, 1500));
+  check((await stats(a.page)).sent - heldFrom > 30, 'holding the button really transmits');
+  await a.page.mouse.up();
+  await a.page.click('.seg button:has-text("Auto")');
 
   // Stops, synced live
   // Asha landed on the planner when she created the ride; friends changed the tab since.
@@ -395,6 +421,7 @@ try {
   check(await waitFor(async () => (await b.page.locator('.deck-btn').count()) === 5, 'rejoined call'), 'a rider can rejoin the call');
 
   await a.page.locator('[role=tab]:has-text("Settings")').click();
+  check((await a.page.locator('text=works in the Android app only').count()) === 1, 'the web app says plainly that Nearby needs the Android app');
   check((await a.page.locator('text=Map: backup map').count()) === 1, 'with no Mappls key, the backup map is used and named in Settings');
   const canvas = await a.page.locator('.maplibregl-canvas').boundingBox();
   check((canvas?.height ?? 0) > 200, 'the backup map fills its area', `${canvas?.width}x${canvas?.height}`);
@@ -425,7 +452,7 @@ try {
   await portal.click('text=Open portal');
   check(await waitFor(async () => (await portal.locator('.stat-card').count()) === 7, 'portal stats'), 'owner portal opens and shows totals');
   check((await portal.locator(`text=${code}`).count()) > 0, 'owner sees the live ride');
-  check((await portal.locator('.limit').count()) === 7, 'the portal shows every free limit');
+  check((await portal.locator('.limit').count()) === 8, 'the portal shows every free limit');
 
   // Approving from the portal itself.
   const reqContext = await browserB.newContext({ viewport: { width: 412, height: 860 } });
@@ -487,6 +514,24 @@ try {
   // The owner can force-close a ride from the portal.
   await portal.locator('button:has-text("End ride")').first().click();
   check(await waitFor(async () => (await b.page.locator('text=ended by the owner').count()) > 0, 'end reaches rider'), 'owner can close a ride for everyone');
+
+  // Changing the owner password in the portal. Last, because it retires the test password.
+  await portal.click('summary:has-text("Change owner password")');
+  await portal.fill('[aria-label="Current owner password"]', 'wrong-password');
+  await portal.fill('[aria-label="New owner password"]', 'brand-new-owner-pass');
+  await portal.click('button:has-text("Change password")');
+  check(await waitFor(async () => (await portal.locator('text=Your current password is not right').count()) > 0, 'wrong current'), 'the owner password needs the current one to change');
+  await portal.fill('[aria-label="Current owner password"]', 'local-admin-only');
+  await portal.click('button:has-text("Change password")');
+  check(await waitFor(async () => (await portal.locator('#owner').count()) > 0, 'signed out'), 'changing the owner password signs out the portal');
+  const raw = await fetch(`${BASE}/api/admin/overview`, { headers: { authorization: 'Bearer local-admin-only' } });
+  check(raw.status === 401, 'the old owner password stops working at once');
+  await portal.fill('#owner', 'local-admin-only');
+  await portal.click('text=Open portal');
+  check(await waitFor(async () => (await portal.locator('text=Wrong owner password').count()) > 0, 'old refused'), 'the old password is refused at the portal');
+  await portal.fill('#owner', 'brand-new-owner-pass');
+  await portal.click('text=Open portal');
+  check(await waitFor(async () => (await portal.locator('.stat-card').count()) === 7, 'new works'), 'the new owner password opens the portal');
 
   await browserA.close();
   await browserB.close();

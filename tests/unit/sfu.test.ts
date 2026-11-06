@@ -132,6 +132,29 @@ describe('SFU transport', () => {
     expect(calls.filter((c) => (c.body as { tracks?: { location: string }[] })?.tracks?.[0]?.location === 'remote')).toHaveLength(2);
   });
 
+  it('retries a pull that failed, so no rider stays silent', async () => {
+    vi.useFakeTimers();
+    const t = await start();
+    const real = api.tracks;
+    let failures = 1;
+    api.tracks = async (id, body) => {
+      if (failures-- > 0) throw new Error('busy');
+      return real(id, body);
+    };
+    t.syncRiders([rider('a')]);
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(2_100);
+    vi.useRealTimers();
+    expect(calls.filter((c) => (c.body as { tracks?: { location: string }[] })?.tracks?.[0]?.location === 'remote')).toHaveLength(1);
+  });
+
+  it('ignores riders who have already moved to direct links', async () => {
+    const t = await start();
+    t.syncRiders([{ ...rider('a'), voice: { sessionId: 'x', trackName: 'mesh' } }]);
+    await flush();
+    expect(calls.filter((c) => (c.body as { tracks?: { location: string }[] })?.tracks?.[0]?.location === 'remote')).toHaveLength(0);
+  });
+
   it('keeps a pull through a control-socket blip', async () => {
     const t = await start();
     t.syncRiders([rider('a')]);
@@ -152,8 +175,40 @@ describe('SFU transport', () => {
     expect(events.onRemoteGone).toHaveBeenCalledWith('a');
   });
 
-  it('surfaces a per-track failure inside a 200 response', async () => {
-    api.tracks = async () => ({ tracks: [{ errorCode: 'not_found' }] });
-    await expect(start()).rejects.toThrow('not_found');
+  it('does not pull while still publishing, which would corrupt the handshake', async () => {
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    const real = api.tracks;
+    api.tracks = async (id, body) => {
+      await gate;
+      return real(id, body);
+    };
+    const t = new SfuTransport('me', [], api, publish, events);
+    const starting = t.start(track);
+    await flush();
+    t.syncRiders([rider('a')]); // A rider appears mid-handshake.
+    await flush();
+    expect(calls.filter((c) => (c.body as { tracks?: { location: string }[] })?.tracks?.[0]?.location === 'remote')).toHaveLength(0);
+    release();
+    await starting;
+    await flush();
+    await flush();
+    const order = calls.filter((c) => c.op === 'tracks').map((c) => (c.body as { tracks: { location: string }[] }).tracks[0]?.location);
+    expect(order).toEqual(['local', 'remote']);
+  });
+
+  it('keeps retrying after a failed start instead of giving up', async () => {
+    vi.useFakeTimers();
+    const real = api.tracks;
+    let failures = 2;
+    api.tracks = async (id, body) => {
+      if (failures-- > 0) return { tracks: [{ errorCode: 'not_found' }] };
+      return real(id, body);
+    };
+    await start();
+    expect(publish).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(3000);
+    vi.useRealTimers();
+    expect(publish).toHaveBeenCalledWith(expect.objectContaining({ trackName: 'rider-me' }));
   });
 });

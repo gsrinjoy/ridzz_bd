@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import { MAX_RIDERS, type AdminRider, type AlertKind, type ClientMessage, type LocTuple, type Position, type RideInfo, type RidePhase, type Rider, type ServerMessage, type Stop, type StopKind, type VoicePublication } from '../../../shared/protocol';
+import type { RidePolicy } from '../../../shared/budgets';
 import { isValidLatLng } from '../../../shared/geo';
 import type { Env } from '../../env';
 import { directory } from '../directory/Directory';
@@ -13,6 +14,8 @@ const USAGE_FLUSH_MS = 60_000;
 const MESSAGES_PER_REQUEST = 20;
 /** Opus at the capped bitrate, in GB per second of speech per listener. */
 const VOICE_GB_PER_SECOND = 24_000 / 8 / 1e9;
+/** Durable Objects bill time at 128 MB of memory. */
+const OBJECT_GB = 0.128;
 /** Ride data is deleted this long after the last activity. */
 const RETENTION_MS = 48 * 3600_000;
 
@@ -39,6 +42,7 @@ export class RideRoom extends DurableObject<Env> {
   private relayGb = 0;
   private usageFlushedAt = Date.now();
   private readonly talkingSince = new Map<string, number>();
+  private policy: RidePolicy = { relay: true, eco: false };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -182,6 +186,8 @@ export class RideRoom extends DurableObject<Env> {
     this.broadcast({ t: 'rider', rider }, riderId);
     await this.touch();
     await directory(this.env).touchRide(this.info.code);
+    this.policy = await directory(this.env).policy();
+    this.send(server, { t: 'policy', ...this.policy });
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -269,10 +275,19 @@ export class RideRoom extends DurableObject<Env> {
   }
 
   private flushUsage(): void {
-    const amounts = { do_requests: this.messages / MESSAGES_PER_REQUEST, rows_written: this.rowsWritten, relay_gb: this.relayGb };
+    const seconds = (Date.now() - this.usageFlushedAt) / 1000;
+    const amounts = { do_requests: this.messages / MESSAGES_PER_REQUEST, rows_written: this.rowsWritten, relay_gb: this.relayGb, do_duration: seconds * OBJECT_GB };
     this.messages = this.rowsWritten = this.relayGb = 0;
     this.usageFlushedAt = Date.now();
-    this.ctx.waitUntil(directory(this.env).addUsage(amounts));
+    this.ctx.waitUntil(directory(this.env).addUsage(amounts).then(() => this.refreshPolicy()));
+  }
+
+  /** The limits can be reached mid-ride, so a call in progress has to be told, not just new ones. */
+  async refreshPolicy(): Promise<void> {
+    const next = await directory(this.env).policy();
+    if (next.relay === this.policy.relay && next.eco === this.policy.eco) return;
+    this.policy = next;
+    this.broadcast({ t: 'policy', ...next });
   }
 
   private updateRide(msg: { name?: string; startsAt?: number | null }): void {

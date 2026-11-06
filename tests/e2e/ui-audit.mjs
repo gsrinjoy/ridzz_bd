@@ -169,9 +169,13 @@ for (const [width, height] of SIZES) {
   await step('friends', true);
   await page.tap('[role=tab]:has-text("Settings")');
   await step('settings', true);
-  await page.tap('[aria-pressed="false"]:has-text("Hold")').catch(() => undefined);
   await page.tap('text=Ride mode (saves battery)');
   await step('ride-mode', true);
+  await wait(10500);
+  const pocketPixels = await page.evaluate(() => ({ text: document.body.innerText.trim().length, black: getComputedStyle(document.querySelector('.ridemode.pocket') ?? document.body).backgroundColor }));
+  if (pocketPixels.text > 0 || pocketPixels.black !== 'rgb(0, 0, 0)') console.log(`${width}px  pocket mode is not fully black ${JSON.stringify(pocketPixels)}`);
+  await page.tap('.ridemode.pocket');
+  await wait(300);
   await page.tap('.ridemode-foot .btn');
   await page.tap('[role=tab]:has-text("Plan")').catch(() => undefined);
   await page.tap('button:has-text("Start ride")');

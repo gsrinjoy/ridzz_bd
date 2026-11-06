@@ -1,0 +1,52 @@
+# Builds the iPhone app on GitHub's Macs, so no local Xcode is needed.
+# The result is unsigned: SideStore or AltStore signs it with each rider's free Apple ID.
+name: iOS app
+
+on:
+  push:
+    branches: [main]
+    paths: ['ios/**', 'capacitor.config.js', '.github/workflows/ios.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      APP_URL: https://ridzz.ridzz.workers.dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec vite build
+      - run: pnpm exec cap sync ios
+      - name: Compile
+        run: |
+          xcodebuild -project ios/App/App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY='' build
+      - name: Package
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qr Slipstream.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Slipstream-ipa
+          path: Slipstream.ipa
+      - name: Publish a stable download link
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-latest
+          name: iPhone app (latest)
+          body: Install with SideStore or AltStore. See docs/IPHONE.md.
+          files: Slipstream.ipa

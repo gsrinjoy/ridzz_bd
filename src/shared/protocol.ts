@@ -1,4 +1,4 @@
-import type { BudgetView } from './budgets';
+import type { BudgetView, RidePolicy } from './budgets';
 
 /** Wire format between client and RideRoom. Keys are short because location messages dominate traffic. */
 
@@ -82,6 +82,7 @@ export type ServerMessage =
   | { t: 'rtc'; from: string; data: unknown }
   | { t: 'alert'; id: string; kind: AlertKind; pos?: Position; at: number }
   | { t: 'left'; id: string }
+  | ({ t: 'policy' } & RidePolicy)
   | { t: 'ended' }
   | { t: 'kicked' };
 
@@ -172,6 +173,8 @@ export interface AdminOverview {
   liveRides: number;
   ridersOnline: number;
   services: { voiceRelay: boolean; turn: boolean; mappls: boolean };
+  policy: RidePolicy;
+  relayForcedOff: boolean;
   budgets: BudgetView[];
 }
 

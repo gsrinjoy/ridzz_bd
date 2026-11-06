@@ -27,6 +27,7 @@ export interface TracksResponse {
 const CONNECT_TIMEOUT_MS = 10_000;
 const GATHER_TIMEOUT_MS = 2_000;
 const MAX_RETRY_MS = 8_000;
+const PULL_RETRY_MS = 2_000;
 
 /** Cloudflare Realtime: each rider sends one stream and the edge fans it out. */
 export class SfuTransport implements VoiceTransport {
@@ -36,6 +37,8 @@ export class SfuTransport implements VoiceTransport {
   private track: MediaStreamTrack | undefined;
   private sessionId = '';
   private sending = true;
+  /** True once publishing is complete. Pulling any sooner corrupts the handshake in progress. */
+  private ready = false;
   private closed = false;
   private attempts = 0;
   /** riderId -> publication currently pulled */
@@ -53,9 +56,15 @@ export class SfuTransport implements VoiceTransport {
     private readonly events: TransportEvents,
   ) {}
 
+  /** Never fails outright: nobody can tap Retry while riding, so it keeps trying by itself. */
   async start(track: MediaStreamTrack): Promise<void> {
     this.track = track;
-    await this.connect();
+    try {
+      await this.enqueue(() => this.connect());
+    } catch (e) {
+      console.warn('SFU start failed, retrying', e);
+      void this.rebuild();
+    }
   }
 
   private enqueue<T>(job: () => Promise<T>): Promise<T> {
@@ -65,6 +74,7 @@ export class SfuTransport implements VoiceTransport {
   }
 
   private async connect(): Promise<void> {
+    this.ready = false;
     const track = this.track as MediaStreamTrack;
     const { sessionId } = await this.api.newSession();
     const pc = new RTCPeerConnection({ iceServers: this.iceServers as RTCIceServer[], bundlePolicy: 'max-bundle' });
@@ -95,6 +105,7 @@ export class SfuTransport implements VoiceTransport {
     await connected(pc);
 
     this.attempts = 0;
+    this.ready = true;
     this.gate.set(this.sending);
     this.publish({ sessionId, trackName });
     this.events.onHealth('live', this.pulled.size);
@@ -110,12 +121,14 @@ export class SfuTransport implements VoiceTransport {
 
   private async rebuild(): Promise<void> {
     if (this.closed) return;
+    this.ready = false;
     this.events.onHealth('recovering', 0);
     this.pc?.close();
     this.pc = undefined;
     try {
       await this.enqueue(() => this.connect());
-    } catch {
+    } catch (e) {
+      console.warn('SFU rebuild failed, retrying', e);
       const wait = Math.min(MAX_RETRY_MS, 500 * 2 ** this.attempts++);
       setTimeout(() => void this.rebuild(), wait);
     }
@@ -123,14 +136,20 @@ export class SfuTransport implements VoiceTransport {
 
   syncRiders(riders: Rider[]): void {
     this.wanted = riders;
-    if (!this.pc) return;
+    if (!this.pc || !this.ready) return; // connect() picks these up when it finishes.
     for (const r of riders) {
-      if (r.id === this.selfId || !r.voice) continue;
+      // During a switch to direct links, a rider who has already moved is not on the relay.
+      if (r.id === this.selfId || !r.voice || r.voice.trackName === 'mesh') continue;
       const have = this.pulled.get(r.id);
       if (have?.sessionId === r.voice.sessionId && have.trackName === r.voice.trackName) continue;
       const pub = r.voice;
       this.pulled.set(r.id, pub);
-      void this.enqueue(() => this.pull(r.id, pub)).catch(() => this.pulled.delete(r.id));
+      void this.enqueue(() => this.pull(r.id, pub)).catch((e: unknown) => {
+        console.warn('SFU pull failed', e);
+        this.pulled.delete(r.id);
+        // A rider must not stay silent because one request failed.
+        setTimeout(() => this.syncRiders(this.wanted), PULL_RETRY_MS);
+      });
     }
     // Only leaving the call ends a pull. A control-socket blip does not touch the audio.
     const present = new Set(riders.filter((r) => r.voice).map((r) => r.id));

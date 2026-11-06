@@ -7,3 +7,5 @@ android/app/build
 android/.gradle
 android/build
 releases
+ios/App/App/public
+ios/App/build

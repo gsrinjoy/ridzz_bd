@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { endRide, leaveRide, setMeters, signOut } from '../../app/session';
-import { account, canControl, isAndroidApp, mapProvider, meter, phase, prefs, rideMode, setPrefs, voice } from '../../app/store';
+import { account, canControl, isAndroidApp, mapProvider, nearbyAllowed, nearbyPeers, meter, phase, prefs, rideMode, setPrefs, voice } from '../../app/store';
 import { Moon } from '../../ui/icons';
 import { changePassword, updateProfile } from '../ride/api';
 import { setAccount } from '../../app/store';
@@ -106,11 +106,22 @@ export function SettingsPanel() {
 
       {mapProvider.value && <span class="note">Map: {mapProvider.value === 'mappls' ? 'Mappls' : 'backup map (Mappls key not set or unavailable)'}</span>}
 
-      {isAndroidApp() && (
-        <label class="setting-row">
-          <span>Nearby link when the internet drops</span>
-          <input type="checkbox" checked={p.nearbyMode === 'auto'} onChange={(e) => setPrefs({ nearbyMode: e.currentTarget.checked ? 'auto' : 'off' })} />
-        </label>
+      {isAndroidApp() ? (
+        <>
+          <label class="setting-row">
+            <span>Nearby link when the internet drops</span>
+            <input type="checkbox" checked={p.nearbyMode === 'auto'} onChange={(e) => setPrefs({ nearbyMode: e.currentTarget.checked ? 'auto' : 'off' })} />
+          </label>
+          <span class="note">
+            {nearbyAllowed.value === false
+              ? 'Nearby devices permission is off, so this cannot work. Turn it on in Android settings.'
+              : nearbyPeers.value !== null
+                ? `Nearby link is on: ${nearbyPeers.value} in range.`
+                : 'Starts by itself when the internet is lost, and stops when it returns.'}
+          </span>
+        </>
+      ) : (
+        <span class="note">Nearby link (no internet) works in the Android app only. Browsers cannot use it, on any phone.</span>
       )}
       <label class="setting-row">
         <span>Call sounds (join, leave, reconnect)</span>

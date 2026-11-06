@@ -112,6 +112,10 @@ export const myPosition = signal<Position | null>(null);
 export const locationError = signal<string | null>(null);
 
 /** Riders reachable over the local radio link. Null while that link is off. */
+/** A daily free allowance is nearly used, so the app slows updates to stretch it. */
+export const ecoMode = signal(false);
+/** Whether Android granted the permissions the local link needs. Null until asked. */
+export const nearbyAllowed = signal<boolean | null>(null);
 export const nearbyPeers = signal<number | null>(null);
 export const mapProvider = signal<'mappls' | 'backup' | null>(null);
 export const mapReady = signal(false);
@@ -146,4 +150,7 @@ export const otherRiders = computed(() => {
 });
 
 export const isAndroidApp = () => (window as { Capacitor?: { getPlatform?: () => string } }).Capacitor?.getPlatform?.() === 'android';
+const platform = () => (window as { Capacitor?: { getPlatform?: () => string } }).Capacitor?.getPlatform?.();
+/** Either native shell, as against a browser. */
+export const isNativeApp = () => platform() === 'android' || platform() === 'ios';
 export const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);

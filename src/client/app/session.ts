@@ -2,7 +2,7 @@ import { batch, effect, untracked } from '@preact/signals';
 import { distanceM } from '../../shared/geo';
 import type { AlertKind, ClientMessage, LocTuple, Position, RideInfo, RidePhase, Rider, ServerMessage, VoiceConfig } from '../../shared/protocol';
 import { LocationTracker } from '../modules/location/tracker';
-import { NearbyLink } from '../modules/nearby/link';
+import { NearbyLink, prepareNearby } from '../modules/nearby/link';
 import { LocalEncoder, LocalPlayer, localVoiceSupported } from '../modules/nearby/localVoice';
 import { RideShell } from '../modules/power/rideShell';
 import { ScreenWake } from '../modules/power/wakeLock';
@@ -14,7 +14,7 @@ import { speak, unlockSpeech, type Cue } from '../modules/voice/cues';
 import { VoiceEngine } from '../modules/voice/engine';
 import type { SfuApi, TracksResponse } from '../modules/voice/transports/sfu';
 import { fetchFriends, fetchRoute, signOutSession } from '../modules/ride/api';
-import { account, callPrompt, friends, nearbyPeers, openPlanner, reachedStops, route, summaryId, incomingAlert, isAndroidApp, isIos, link, locationError, me, meter, myPosition, notice, prefs, pttHeld, ride, riders, session, setAccount, setSession, stops, transmitting, voice, type Session } from './store';
+import { account, callPrompt, ecoMode, friends, isNativeApp, nearbyAllowed, nearbyPeers, openPlanner, reachedStops, route, summaryId, incomingAlert, isAndroidApp, isIos, link, locationError, me, meter, myPosition, notice, prefs, pttHeld, ride, riders, session, setAccount, setSession, stops, transmitting, voice, type Session } from './store';
 
 /** Call status sounds can be turned off. Alerts and SOS always play. */
 function callCue(cue: Cue): void {
@@ -187,6 +187,9 @@ function onMessage(msg: ServerMessage): void {
       if (inCall(gone)) director?.riderLeft(msg.id, false);
       break;
     }
+    case 'policy':
+      void applyPolicy(msg.relay, msg.eco);
+      break;
     case 'ended':
       notice.value = 'The ride was ended by the owner.';
       leaveRide('call-cut');
@@ -206,6 +209,17 @@ function onMessage(msg: ServerMessage): void {
       break;
     }
   }
+}
+
+/** A limit can be reached mid-ride, so the call has to move without dropping or anyone tapping. */
+async function applyPolicy(relay: boolean, eco: boolean): Promise<void> {
+  ecoMode.value = eco;
+  tracker?.setSaver(eco || prefs.peek().batterySaver || ride.peek()?.phase !== 'riding');
+  const s = session.peek();
+  if (!engine || !s || (relay ? 'sfu' : 'mesh') === engine.transportKind) return;
+  const config = await voiceFetch<VoiceConfig>(s, 'config', 'GET');
+  await engine.switchTransport(config);
+  voice.value = { ...voice.value, transport: config.mode };
 }
 
 /** Runs only when the plan changes, so a settled route costs nothing during the ride. */
@@ -269,7 +283,7 @@ function enterPhase(next: RidePhase): void {
   const previous = currentPhase;
   if (next === previous) return;
   currentPhase = next;
-  tracker?.setSaver(next === 'planning' || prefs.peek().batterySaver);
+  tracker?.setSaver(next === 'planning' || prefs.peek().batterySaver || ecoMode.peek());
 
   if (next === 'riding') {
     if (previous === 'planning') {
@@ -333,7 +347,10 @@ export function connect(s: Session): void {
   }, FRIEND_POLL_MS);
   disposers.push(
     effect(() => {
-      engine?.syncRiders(Object.values(riders.value));
+      // Read first: `engine?.x(signal.value)` skips the read while there is no call,
+      // which leaves the effect subscribed to nothing, for good.
+      const list = Object.values(riders.value);
+      engine?.syncRiders(list);
     }),
     effect(planRoute),
     effect(() => {
@@ -418,14 +435,15 @@ export async function startVoice(): Promise<void> {
     });
     engine = created;
     // Before the mic opens, so Android routes it to the helmet and keeps it alive when the screen locks.
-    if (isAndroidApp()) await startNativeRide();
+    if (isNativeApp()) await startNativeRide();
     await created.start(ctx, prefs.value.talkMode, prefs.value.sensitivity, prefs.value.noiseFilter);
+    created.setVolumes(prefs.value.volumes);
     voice.value = { ...voice.value, status: 'live', transport: config.mode, startedAt: Date.now() };
     director = new CueDirector(callCue);
     callCue('call-join');
     created.syncRiders(Object.values(riders.value));
     // The Android app holds audio open from a foreground service; on the web the screen must stay on.
-    if (!isAndroidApp() && (isIos() || 'wakeLock' in navigator)) void wake.enable();
+    if (!isNativeApp() && (isIos() || 'wakeLock' in navigator)) void wake.enable();
     pollLinkQuality();
   } catch (e) {
     console.warn('voice start', e);
@@ -438,6 +456,9 @@ export async function startVoice(): Promise<void> {
 async function startNativeRide(): Promise<void> {
   await RideShell.start();
   void RideShell.requestBatteryExemption();
+  if (isAndroidApp() && prefs.peek().nearbyMode !== 'off') {
+    await prepareNearby().then(({ granted }) => (nearbyAllowed.value = granted)).catch(() => (nearbyAllowed.value = false));
+  }
   nativeLocation = await RideShell.addListener('location', (pos) => tracker?.accept(pos));
   // The service's GPS replaces the browser's, which stops once the app is in the background.
   tracker?.stop();
@@ -450,7 +471,7 @@ export function stopVoice(farewell?: Cue): void {
   director?.destroy();
   director = undefined;
   chosenOutput = chosenInput = '';
-  if (isAndroidApp() && nativeLocation) {
+  if (isNativeApp() && nativeLocation) {
     void nativeLocation.remove();
     nativeLocation = undefined;
     void RideShell.stop();
@@ -479,20 +500,24 @@ effect(() => {
   lastMode = mode;
 });
 effect(() => {
-  engine?.setVolumes(prefs.value.volumes);
+  const { volumes } = prefs.value;
+  engine?.setVolumes(volumes);
 });
 effect(() => {
-  engine?.setSensitivity(prefs.value.sensitivity);
+  const { sensitivity } = prefs.value;
+  engine?.setSensitivity(sensitivity);
 });
 effect(() => {
-  engine?.setNoiseFilter(prefs.value.noiseFilter);
+  const { noiseFilter } = prefs.value;
+  engine?.setNoiseFilter(noiseFilter);
 });
 effect(() => {
-  engine?.setPtt(pttHeld.value);
+  const held = pttHeld.value;
+  engine?.setPtt(held);
 });
 effect(() => {
   const saver = prefs.value.batterySaver;
-  untracked(() => tracker?.setSaver(saver || ride.value?.phase !== 'riding'));
+  untracked(() => tracker?.setSaver(saver || ecoMode.value || ride.value?.phase !== 'riding'));
 });
 
 export const setMeters = (on: boolean) => engine?.setMeters(on);
@@ -530,7 +555,7 @@ async function devices(kind: MediaDeviceKind): Promise<MediaDeviceInfo[]> {
 
 /** Null means the phone's own controls decide, as on iPhones. */
 export async function audioOutputs(): Promise<AudioRoute[] | null> {
-  if (isAndroidApp()) return (await RideShell.listRoutes()).routes;
+  if (isNativeApp()) return (await RideShell.listRoutes()).routes;
   if (!canPickOutput()) return null;
   return (await devices('audiooutput')).map((d, i) => ({
     id: d.deviceId,
@@ -541,7 +566,7 @@ export async function audioOutputs(): Promise<AudioRoute[] | null> {
 }
 
 export async function selectOutput(id: string): Promise<void> {
-  if (isAndroidApp()) return RideShell.setRoute({ id });
+  if (isNativeApp()) return RideShell.setRoute({ id });
   await engine?.selectOutput(id);
   chosenOutput = id;
 }

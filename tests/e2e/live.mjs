@@ -41,7 +41,7 @@ check((await api('/api/admin/overview')).status === 401, 'the owner API refuses 
 check((await api('/api/admin/overview', { headers: { authorization: 'Bearer wrong' } })).status === 401, 'the owner API refuses a wrong password');
 const over = await api('/api/admin/overview', { headers: owner });
 check(over.status === 200, 'the owner API accepts the owner password', JSON.stringify(over.data?.services));
-check(over.data?.budgets?.length === 7, 'the free limit meters are live', over.data?.budgets?.map((b) => `${b.metric}:${Math.round(b.used)}`).join(' '));
+check(over.data?.budgets?.length === 8, 'the free limit meters are live', over.data?.budgets?.map((b) => `${b.metric}:${Math.round(b.used)}`).join(' '));
 
 const emailA = email('a');
 const weak = await api('/api/auth/register', { method: 'POST', body: { name: 'X', email: email('w'), password: 'short' } });

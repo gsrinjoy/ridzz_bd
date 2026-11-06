@@ -70,6 +70,30 @@ public class NearbyLinkPlugin extends Plugin {
         return true;
     }
 
+    /**
+     * Asks while the rider has the phone in hand. Waiting until the internet drops
+     * would mean a prompt nobody can answer, with the phone in a pocket.
+     */
+    @PluginMethod
+    public void prepare(PluginCall call) {
+        if (permitted()) {
+            reportPermission(call);
+            return;
+        }
+        requestPermissionForAliases(neededAliases(), call, "onPrepared");
+    }
+
+    @PermissionCallback
+    private void onPrepared(PluginCall call) {
+        reportPermission(call);
+    }
+
+    private void reportPermission(PluginCall call) {
+        JSObject result = new JSObject();
+        result.put("granted", permitted());
+        call.resolve(result);
+    }
+
     @PluginMethod
     public void start(PluginCall call) {
         int services = GoogleApiAvailability.getInstance().isGooglePlayServicesAvailable(getContext());

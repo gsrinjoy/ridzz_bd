@@ -3,6 +3,7 @@ import { decode, encode, fromBase64, hashRider, KIND_AUDIO, KIND_CONTROL, Relay,
 
 /** The Android side. Only in the APK: no website can reach Nearby Connections. See NearbyLinkPlugin.java. */
 interface NearbyLinkPlugin {
+  prepare(): Promise<{ granted: boolean }>;
   start(options: { code: string; name: string }): Promise<void>;
   stop(): Promise<void>;
   send(options: { data: string }): Promise<void>;
@@ -11,6 +12,9 @@ interface NearbyLinkPlugin {
 }
 
 const plugin = registerPlugin<NearbyLinkPlugin>('NearbyLink');
+
+/** Android only. Run while the rider can still tap Allow. */
+export const prepareNearby = () => plugin.prepare();
 
 export interface LinkEvents {
   onAudio(sender: number, packet: Uint8Array): void;

@@ -34,13 +34,15 @@ function Login({ onDone }: { onDone: (token: string) => void }) {
   async function submit(e: Event) {
     e.preventDefault();
     try {
-      await api(value, 'overview');
+      const res = await fetch('/api/admin/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: value }) });
+      const data = (await res.json()) as { token?: string; error?: string };
+      if (!data.token) throw new Error(data.error ?? 'Could not sign in');
       try {
-        sessionStorage.setItem(KEY, value);
+        sessionStorage.setItem(KEY, data.token);
       } catch {
         // Then it lasts until this page closes.
       }
-      onDone(value);
+      onDone(data.token);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not sign in');
     }
@@ -58,6 +60,36 @@ function Login({ onDone }: { onDone: (token: string) => void }) {
   );
 }
 
+function OwnerPassword({ token, onChanged }: { token: string; onChanged: () => void }) {
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [message, setMessage] = useState('');
+
+  async function submit(e: Event) {
+    e.preventDefault();
+    setMessage('');
+    try {
+      await api(token, 'password', { method: 'POST', body: JSON.stringify({ current, next }) });
+      onChanged();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Could not change it');
+    }
+  }
+
+  return (
+    <details class="admin-card owner-password">
+      <summary>Change owner password</summary>
+      <form onSubmit={(e) => void submit(e)}>
+        <input class="field" type="password" autoComplete="current-password" placeholder="Current password" aria-label="Current owner password" value={current} onInput={(e) => setCurrent(e.currentTarget.value)} />
+        <input class="field" type="password" autoComplete="new-password" placeholder="New password, 8 or more characters" aria-label="New owner password" value={next} onInput={(e) => setNext(e.currentTarget.value)} />
+        <button class="btn primary" disabled={!current || next.length < 8}>Change password</button>
+        {message && <p class="error" role="alert">{message}</p>}
+        <p class="note">You will sign in again afterwards. If you ever forget it, set a new ADMIN_TOKEN with Wrangler and sign in with that.</p>
+      </form>
+    </details>
+  );
+}
+
 const Stat = ({ label, value }: { label: string; value: number }) => (
   <div class="stat-card"><span class="label">{label}</span><b class="num">{value}</b></div>
 );
@@ -70,7 +102,7 @@ const STATE_TEXT = { ok: 'OK', warning: 'Approaching limit', critical: 'Nearly a
 
 const amount = (b: BudgetView) => (b.unit === 'GB' ? b.used.toFixed(2) : Math.round(b.used).toLocaleString());
 
-function FreeLimits({ budgets }: { budgets: BudgetView[] }) {
+function FreeLimits({ budgets, overview, act }: { budgets: BudgetView[]; overview: AdminOverview; act: (path: string, body?: unknown) => void }) {
   const worst = budgets.filter((b) => b.state !== 'ok');
   return (
     <section class="admin-card limits">
@@ -79,7 +111,11 @@ function FreeLimits({ budgets }: { budgets: BudgetView[] }) {
           <b>Free limits</b>
           <div class="note">Estimated from the app's own counters. Exact figures are in the Cloudflare dashboard.</div>
         </div>
+        <button class="btn" onClick={() => { if (confirm(overview.relayForcedOff ? 'Turn the voice relay back on?' : 'Move all calls to free direct links? These can fail on some mobile networks.')) act('voice-relay', { on: overview.relayForcedOff }); }}>
+          {overview.relayForcedOff ? 'Turn relay on' : 'Turn relay off'}
+        </button>
       </header>
+      <p class="note limit-mode">{overview.policy.relay ? 'Calls use the voice relay.' : 'Calls use free direct links.'}{overview.policy.eco ? ' Eco mode is on: location updates are slower to stretch a daily limit.' : ''}</p>
       {worst.map((b) => (
         <p key={b.metric} class={`limit-alert ${b.state}`} role="alert">
           <b>{b.label}: {STATE_TEXT[b.state]}.</b>{b.lock ? ` At 95%: ${b.lock.toLowerCase()}.` : ''}
@@ -231,9 +267,11 @@ export function AdminApp() {
             <Service name="TURN" on={overview.services.turn} off="Some networks may fail" />
             <Service name="Mappls" on={overview.services.mappls} off="Using the backup map" />
           </div>
-          <FreeLimits budgets={overview.budgets} />
+          <FreeLimits budgets={overview.budgets} overview={overview} act={act} />
         </>
       )}
+
+      <OwnerPassword token={token} onChanged={() => { sessionStorage.removeItem(KEY); setToken(''); }} />
 
       <div class="seg admin-tabs" role="group" aria-label="View">
         <button aria-pressed={view === 'rides'} onClick={() => setView('rides')}>Rides ({rides.length})</button>

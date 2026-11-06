@@ -22,6 +22,7 @@ export const BUDGETS: Budget[] = [
   { metric: 'google_search', label: 'Google search (own cap)', period: 'month', limit: 3000, unit: 'searches', lock: 'Search switches to the free service', billable: true },
   { metric: 'worker_requests', label: 'Worker requests', period: 'day', limit: 100_000, unit: 'requests', lock: 'New rides are refused until tomorrow' },
   { metric: 'do_requests', label: 'Durable Object requests', period: 'day', limit: 100_000, unit: 'requests', lock: 'New rides are refused until tomorrow' },
+  { metric: 'do_duration', label: 'Durable Object time', period: 'day', limit: 13_000, unit: 'GB-s' },
   { metric: 'rows_written', label: 'Database writes', period: 'day', limit: 100_000, unit: 'rows' },
   { metric: 'place_search', label: 'Free place search (own cap)', period: 'day', limit: 2000, unit: 'searches', lock: 'Search pauses until tomorrow' },
   { metric: 'routing', label: 'Free routing (own cap)', period: 'day', limit: 1000, unit: 'routes', lock: 'Routes show as straight lines until tomorrow' },
@@ -37,6 +38,14 @@ export function budgetState(budget: Budget, used: number): BudgetState {
   if (share >= CRITICAL_AT) return 'critical';
   if (share >= WARN_AT) return 'warning';
   return 'ok';
+}
+
+/** What every ride should do right now, decided from the meters. */
+export interface RidePolicy {
+  /** False sends voice over free direct links instead of the relay. */
+  relay: boolean;
+  /** True stretches a nearly used daily allowance by slowing location updates. */
+  eco: boolean;
 }
 
 export const periodKey = (period: Period, now: number) => new Date(now).toISOString().slice(0, period === 'day' ? 10 : 7);
