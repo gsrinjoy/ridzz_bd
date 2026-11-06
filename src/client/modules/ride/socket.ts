@@ -3,6 +3,11 @@ import type { ClientMessage, ServerMessage } from '../../../shared/protocol';
 const PING_MS = 25_000;
 const PONG_TIMEOUT_MS = 8_000;
 const MAX_BACKOFF_MS = 8_000;
+/**
+ * A connection tried with no signal can sit unanswered for minutes without failing.
+ * Waiting it out would keep a rider off the call long after the signal came back.
+ */
+const CONNECT_TIMEOUT_MS = 7_000;
 
 /**
  * The ride's control channel. It never gives up: riders cannot touch the phone,
@@ -15,6 +20,7 @@ export class RideSocket {
   private retry: ReturnType<typeof setTimeout> | undefined;
   private ping: ReturnType<typeof setInterval> | undefined;
   private pongDue: ReturnType<typeof setTimeout> | undefined;
+  private connectDue: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly url: string,
@@ -52,9 +58,15 @@ export class RideSocket {
 
   private open(): void {
     this.ws?.close();
+    clearTimeout(this.connectDue);
     const ws = new WebSocket(this.url);
     this.ws = ws;
+    this.connectDue = setTimeout(() => {
+      this.lost(ws);
+      ws.close();
+    }, CONNECT_TIMEOUT_MS);
     ws.onopen = () => {
+      clearTimeout(this.connectDue);
       this.attempts = 0;
       this.onState('live');
       this.startPing(ws);
@@ -95,5 +107,6 @@ export class RideSocket {
   private stopTimers(): void {
     clearInterval(this.ping);
     clearTimeout(this.pongDue);
+    clearTimeout(this.connectDue);
   }
 }

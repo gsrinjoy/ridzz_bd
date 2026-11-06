@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RiderPin } from '../../src/client/modules/map/engine';
+import { stopPinHtml, type RiderPin } from '../../src/client/modules/map/engine';
 import { createMapplsEngine, explainRefusal, type MapplsSdk } from '../../src/client/modules/map/mapplsEngine';
 
 // Pins this adapter to the calls in Mappls' V3 docs. Real behaviour needs a real key.
@@ -107,10 +107,10 @@ describe('Mappls engine', () => {
   });
   it('draws routes with lat/lng paths and replaces the old one', async () => {
     const e = await open();
-    e.setRoute([{ la: 1, lo: 2 }, { la: 3, lo: 4 }]);
+    e.setRoute([{ la: 1, lo: 2 }, { la: 3, lo: 4 }], true);
     expect(f.log.lines[0]).toMatchObject({ path: [{ lat: 1, lng: 2 }, { lat: 3, lng: 4 }], fitbounds: false });
-    e.setRoute([{ la: 5, lo: 6 }, { la: 7, lo: 8 }]);
-    expect(f.log.removed).toHaveLength(1);
+    e.setRoute([{ la: 5, lo: 6 }, { la: 7, lo: 8 }], true);
+    expect(f.log.removed).toHaveLength(2); // The line and its casing.
   });
   it('fits bounds in the documented lng,lat order', async () => {
     const e = await open();
@@ -160,5 +160,24 @@ describe('why Mappls refused', () => {
 
   it('points at the device when Mappls itself answered fine', () => {
     expect(explainRefusal(200, 'var mappls = {}')).toContain('blocked');
+  });
+});
+
+describe('stop pins', () => {
+  const stop = { id: 'a', la: 1, lo: 2, name: 'Tea <stall>', index: 3, kind: 'fuel' as const, selected: false, reached: false };
+
+  it('shows the number and a safe name', () => {
+    const html = stopPinHtml(stop);
+    expect(html).toContain('>3<');
+    expect(html).not.toContain('<stall>');
+  });
+
+  it('marks start and finish, the selected stop, and stops already reached', () => {
+    expect(stopPinHtml({ ...stop, kind: 'start' })).toContain('kind-start');
+    expect(stopPinHtml({ ...stop, kind: 'finish' })).toContain('kind-finish');
+    expect(stopPinHtml({ ...stop, selected: true })).toContain('selected');
+    const done = stopPinHtml({ ...stop, reached: true });
+    expect(done).toContain('reached');
+    expect(done).toContain('✓');
   });
 });

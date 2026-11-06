@@ -1,5 +1,5 @@
 import type { LatLng } from '../../../shared/geo';
-import { DEFAULT_VIEW, LONG_PRESS_MS, riderLabel, riderPinClass, type MapEngine, type MapEvents, type RiderPin, type StopPin } from './engine';
+import { DEFAULT_VIEW, DROPPED_PIN_HTML, escapeHtml, LONG_PRESS_MS, riderLabel, riderPinClass, stopPinHtml, type MapEngine, type MapEvents, type RiderPin } from './engine';
 
 type Point = { lat: number; lng: number };
 
@@ -38,13 +38,12 @@ const SDK_TIMEOUT_MS = 8_000;
 
 const point = (p: LatLng): Point => ({ lat: p.la, lng: p.lo });
 
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-
 function riderHtml(r: RiderPin): string {
   return `<div class="${riderPinClass(r)}" style="background:${escapeHtml(r.color)}" title="${escapeHtml(r.name)}">${escapeHtml(riderLabel(r))}</div>`;
 }
 
-const stopHtml = (s: StopPin) => `<div class="stop-pin num" title="${escapeHtml(s.name)}">${s.index}</div>`;
+/** Mappls centres a marker on its point, so the pin is lifted until its tip is there instead. */
+const lifted = (html: string) => `<div class="pin-lift">${html}</div>`;
 
 /**
  * Turns Mappls' answer into something the owner can act on. Only known fields are
@@ -115,8 +114,10 @@ export function createMapplsEngine(sdk: MapplsSdk, containerId: string, start: L
   });
 
   const riders = new Map<string, { marker: MapplsMarker; html: string }>();
-  const stops: unknown[] = [];
+  const stops = new Map<string, { marker: MapplsMarker; html: string }>();
+  let dropped: unknown;
   let route: unknown;
+  let casing: unknown;
   let link: unknown;
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -181,17 +182,39 @@ export function createMapplsEngine(sdk: MapplsSdk, containerId: string, start: L
     },
 
     setStops(list) {
-      stops.splice(0).forEach(drop);
+      const seen = new Set<string>();
       for (const s of list) {
-        const marker = new sdk.Marker({ map, position: point(s), html: stopHtml(s), fitbounds: false });
+        seen.add(s.id);
+        const html = lifted(stopPinHtml(s));
+        const existing = stops.get(s.id);
+        if (existing?.html === html) {
+          existing.marker.setPosition(point(s));
+          continue;
+        }
+        // The SDK cannot restyle a marker, so a changed pin is replaced.
+        if (existing) drop(existing.marker);
+        const marker = new sdk.Marker({ map, position: point(s), html, fitbounds: false });
         marker.addListener?.('click', () => events.onStopTap(s.id));
-        stops.push(marker);
+        stops.set(s.id, { marker, html });
+      }
+      for (const [id, entry] of stops) {
+        if (!seen.has(id)) {
+          drop(entry.marker);
+          stops.delete(id);
+        }
       }
     },
 
-    setRoute(line) {
+    setRoute(line, exact) {
+      drop(casing);
       drop(route);
-      route = polyline(line, { strokeColor: '#FF6A1A', strokeOpacity: 0.9, strokeWeight: 5 });
+      casing = exact ? polyline(line, { strokeColor: '#8F3200', strokeOpacity: 1, strokeWeight: 8 }) : undefined;
+      route = polyline(line, { strokeColor: '#FF6A1A', strokeOpacity: 1, strokeWeight: 5, ...(exact ? {} : { lineGap: 2 }) });
+    },
+
+    setDropped(at) {
+      drop(dropped);
+      dropped = at ? new sdk.Marker({ map, position: point(at), html: lifted(DROPPED_PIN_HTML), fitbounds: false }) : undefined;
     },
 
     setLink(line) {

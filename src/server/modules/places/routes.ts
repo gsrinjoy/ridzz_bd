@@ -76,7 +76,8 @@ async function route(coords: string): Promise<Response> {
   const pairs = coords.split(';').map((p) => p.split(',').map(Number));
   if (pairs.length < 2 || pairs.length > 12 || !pairs.every(([lo, la]) => isValidLatLng(la, lo))) return fail(400, 'Bad coordinates');
   // Public OSRM: fine at this volume, but no uptime promise, so the client treats failure as normal.
-  const url = `https://router.project-osrm.org/route/v1/driving/${pairs.map((p) => p.join(',')).join(';')}?overview=simplified&geometries=geojson`;
+  // Riders stop and turn around at a stop, so the route must not circle a block to carry straight on.
+  const url = `https://router.project-osrm.org/route/v1/driving/${pairs.map((p) => p.join(',')).join(';')}?overview=full&geometries=geojson&continue_straight=false`;
   const res = await fetch(url, { headers: UA, cf: { cacheTtl: 86400, cacheEverything: true } });
   if (!res.ok) return fail(502, 'Routing unavailable');
   const data = await res.json<{ routes?: { distance: number; duration: number; legs: { distance: number; duration: number }[]; geometry: { coordinates: [number, number][] } }[] }>();
@@ -87,7 +88,8 @@ async function route(coords: string): Promise<Response> {
       distanceM: best.distance,
       durationS: best.duration,
       legs: best.legs.map((l) => ({ distanceM: l.distance, durationS: l.duration })),
-      line: best.geometry.coordinates,
+      // Full detail follows every bend. Five decimals is one metre, and keeps long rides small.
+      line: best.geometry.coordinates.map(([lo, la]) => [Math.round(lo * 1e5) / 1e5, Math.round(la * 1e5) / 1e5] as [number, number]),
     } satisfies RouteResult,
     200,
     { 'cache-control': DAY },

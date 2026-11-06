@@ -170,10 +170,23 @@ input[type='checkbox'] { width: 24px; height: 24px; accent-color: var(--accent);
 .rider-pin.me { outline: 2.5px solid #fff; outline-offset: 1px; }
 .rider-pin.off { filter: grayscale(1) brightness(.65); }
 .rider-pin.talking { outline: 3px solid var(--accent); outline-offset: 2px; }
-.stop-pin { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; font-weight: 800; font-size: 13px; background: #f2f4f7; color: #08090b; border: 2px solid #08090b; box-shadow: 0 1px 5px #0009; }
+.stop-pin { position: relative; width: 36px; height: 46px; cursor: pointer; transform-origin: 50% 100%; transition: transform .14s ease; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, .65)); }
+.stop-pin svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.stop-pin path { fill: #f2f4f7; stroke: #08090b; stroke-width: 1.5; }
+.stop-pin b { position: absolute; top: 5px; left: 0; right: 0; text-align: center; font-size: 15px; font-weight: 800; line-height: 26px; color: #08090b; }
+.stop-pin.kind-start path { fill: var(--live); }
+.stop-pin.kind-finish path { fill: var(--danger); }
+.stop-pin.kind-finish b { color: #fff; }
+.stop-pin.reached path { fill: #5b6472; }
+.stop-pin.reached b { color: #fff; }
+.stop-pin.selected { transform: scale(1.22); }
+.stop-pin.selected path, .stop-pin.dropped path { fill: var(--accent); }
+.stop-pin.selected b, .stop-pin.dropped b { color: var(--accent-ink); }
+.stop-pin-name { position: absolute; top: calc(100% + 2px); left: 50%; transform: translateX(-50%); max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: #f2f4f7; text-shadow: 0 0 3px #000, 0 0 3px #000, 0 1px 2px #000; pointer-events: none; }
+.pin-lift { transform: translateY(-50%); }
 .maplibregl-ctrl-attrib { font-size: 10px; }
 /* The dock overlaps the map, and the map's credits must stay visible. */
-.maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: 20px; }
+.maplibregl-ctrl-bottom-left, .maplibregl-ctrl-bottom-right { bottom: 30px; }
 .maplibregl-ctrl-bottom-right { right: 66px; }
 
 /* Call deck */

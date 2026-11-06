@@ -1,7 +1,7 @@
 import { effect } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import type { LatLng } from '../../../shared/geo';
-import { droppedPin, mapProblem, mapProvider, mapReady, myPosition, nextStop, phase, riders, route, selectedRiderId, selectedStopId, session, stops } from '../../app/store';
+import { droppedPin, mapProblem, mapProvider, mapReady, myPosition, nextStop, phase, reachedStops, riders, route, selectedRiderId, selectedStopId, session, stops } from '../../app/store';
 import { fetchConfig } from '../ride/api';
 import type { MapEngine, MapEvents, RiderPin } from './engine';
 import { createMapplsEngine, loadMapplsSdk } from './mapplsEngine';
@@ -58,6 +58,7 @@ export default function RideMap({ handle }: { handle: { current: MapHandle | nul
     let cancelled = false;
     let disposers: (() => void)[] = [];
     let fitted = false;
+    let planKey = '';
     let lastFollow = 0;
     let pausedUntil = 0;
     mapReady.value = false;
@@ -100,12 +101,32 @@ export default function RideMap({ handle }: { handle: { current: MapHandle | nul
           }
         }),
         effect(() => {
-          e.setStops(stops.value.map((s, i) => ({ ...s, index: i + 1 })));
+          const selected = selectedStopId.value;
+          const reached = reachedStops.value;
+          e.setStops(stops.value.map((s, i) => ({ ...s, index: i + 1, selected: s.id === selected, reached: reached.includes(s.id) })));
         }),
         effect(() => {
           // The road route when known; otherwise straight lines still show the order of the plan.
           const line = route.value?.line.map(([lo, la]) => ({ la, lo }));
-          e.setRoute(line ?? stops.value);
+          e.setRoute(line ?? stops.value, !!line);
+        }),
+        effect(() => e.setDropped(droppedPin.value)),
+        effect(() => {
+          // Editing a plan shows the whole new plan, as long as nobody is riding it.
+          const list = stops.value;
+          const line = route.value?.line.map(([lo, la]) => ({ la, lo })) ?? [];
+          const key = `${list.map((s) => s.id).join()}|${route.value?.distanceM ?? ''}`;
+          if (key === planKey) return;
+          planKey = key;
+          if (list.length && phase.peek() !== 'riding') {
+            fitted = true;
+            e.fit([...list, ...line]);
+          }
+        }),
+        effect(() => {
+          const id = selectedStopId.value;
+          const stop = stops.peek().find((s) => s.id === id);
+          if (stop) e.center(stop, 14);
         }),
         effect(() => {
           const id = selectedRiderId.value;

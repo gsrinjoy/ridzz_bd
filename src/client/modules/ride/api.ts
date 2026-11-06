@@ -53,4 +53,5 @@ export const searchPlaces = (q: string, near?: LatLng | null) =>
 export const resolveLink = (url: string) => call<ParsedPlace>(`/api/places/resolve?url=${encodeURIComponent(url)}`);
 
 export const fetchRoute = (points: LatLng[]) =>
-  call<RouteResult>(`/api/route?coords=${points.map((p) => `${p.lo},${p.la}`).join(';')}`);
+  // v changes when the route data does, because browsers keep these for a day.
+  call<RouteResult>(`/api/route?v=2&coords=${points.map((p) => `${p.lo},${p.la}`).join(';')}`);

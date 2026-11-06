@@ -34,6 +34,7 @@ Tests: `unit` (126), `call` (two real Chrome browsers over WebRTC), `webkit` (Sa
 | Ride planner: total ride, stops, group sync | Done | call: name, time, stops, order reach other riders |
 | Rearrange and remove stops | Done | stops: drag handle and remove on every row, real touch drag, Safari engine, 14-stop list, reach other riders. A finger on a real iPhone is untested |
 | Stop types on every screen | Done | stops: all 7 show from 360 px phones to 1920 px desktops |
+| Route and stop pins on the map | Done | Real ride checked by eye: road-following route with direction arrows, pins exact to the metre through zoom, selected stop stands out, long-press pin. Mappls version of these is built but has never drawn |
 | Search for places | Done | live: free search works |
 | Search from Google Maps | Done | Search on Google Maps button, then share or paste back |
 | Google search inside the app | Needs key | Built and unit-tested. Google requires a billing account, so this is the owner's choice |

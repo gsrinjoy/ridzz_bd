@@ -5,3 +5,8 @@
   X-Frame-Options: DENY
   Referrer-Policy: no-referrer
   Permissions-Policy: microphone=(self), geolocation=(self), screen-wake-lock=(self), camera=(), payment=(), usb=()
+
+/download/*
+  Content-Type: application/vnd.android.package-archive
+  Content-Disposition: attachment; filename="Slipstream.apk"
+  Cache-Control: no-cache

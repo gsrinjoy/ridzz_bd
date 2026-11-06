@@ -1,9 +1,31 @@
+import { connect, createServer } from 'node:net';
 // Runs the real APK on a booted emulator and asks Android what actually happened.
 // Needs: wrangler dev on 8792, the APK built with APP_URL=http://localhost:8792.
 import { execFileSync, spawn } from 'node:child_process';
 
 const PKG = 'app.slipstream.rider';
 const PORT = 8792;
+/** The phone reaches the server through this gate, so a test can pull the plug on live sockets. */
+const GATE = 8793;
+const piped = new Set();
+let internet = true;
+const gate = createServer((client) => {
+  if (!internet) return client.destroy();
+  const upstream = connect(PORT, '127.0.0.1');
+  for (const [a, b] of [[client, upstream], [upstream, client]]) {
+    piped.add(a);
+    a.pipe(b);
+    a.on('error', () => undefined);
+    a.on('close', () => {
+      piped.delete(a);
+      b.destroy();
+    });
+  }
+}).listen(GATE);
+const setInternet = (on) => {
+  internet = on;
+  if (!on) piped.forEach((s) => s.destroy());
+};
 const CDP = 9333;
 let failures = 0;
 const check = (ok, label, detail = '') => {
@@ -110,7 +132,7 @@ function memoryMb() {
 }
 
 try {
-  adb('reverse', `tcp:${PORT}`, `tcp:${PORT}`);
+  adb('reverse', `tcp:${PORT}`, `tcp:${GATE}`);
   adb('emu', 'geo', 'fix', '77.5946', '12.9716');
   // First run, with nothing granted: Android itself must ask.
   shell(`pm clear ${PKG}`);
@@ -188,7 +210,12 @@ try {
     const webcodecs = 'AudioEncoder' in window && (await AudioEncoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1 })).supported;
     const plugin = window.Capacitor.Plugins.NearbyLink;
     try {
-      await plugin.start({ code: 'TEST22', name: 'Dev' });
+      await plugin.start({ code: 'TEST22', name: '12345' });
+      // Every call the mesh makes, on the real plugin. The radio itself needs two phones.
+      await plugin.setDiscovery({ on: false });
+      await plugin.setDiscovery({ on: true });
+      await plugin.connect({ endpointId: 'nobody' });
+      for (let i = 0; i < 300; i++) await plugin.send({ data: btoa('hello'), except: 'nobody' });
       await plugin.stop();
       return { webcodecs, started: true };
     } catch (e) {
@@ -228,6 +255,32 @@ try {
   }
   const fixes = await page.evaluate(() => window.__fixes);
   check(fixes > 0, 'native GPS fixes reach the app', `${fixes} fixes`);
+
+  // The internet goes while GPS keeps firing, which once postponed the switch for ever.
+  const localLinkOn = () => page.evaluate(() => {
+    const tab = [...document.querySelectorAll('[role=tab]')].find((t) => /Settings/.test(t.textContent));
+    if (tab && tab.getAttribute('aria-selected') !== 'true') tab.click();
+    return [...document.querySelectorAll('.note')].some((n) => n.textContent.startsWith('Nearby link is on'));
+  });
+  const statusChip = () => page.evaluate(() => document.querySelector('.chip[role=status]')?.innerText.replace(/\s+/g, ' '));
+  check(!(await localLinkOn()), 'the local link is off while the internet works');
+  const ride = async (seconds, until) => {
+    const began = Date.now();
+    for (let i = 0; i < seconds; i++) {
+      adb('emu', 'geo', 'fix', String(77.6 + i * 0.0004), '12.9716');
+      await wait(1000);
+      if (await until()) return Math.round((Date.now() - began) / 1000);
+    }
+    return null;
+  };
+  setInternet(false);
+  const startedAfter = await ride(40, localLinkOn);
+  check(startedAfter !== null, 'losing the internet starts the local link by itself, with GPS firing', `${startedAfter}s`);
+  check(/Nearby/.test(await statusChip()), 'the rider can see the call is on the local link', await statusChip());
+  setInternet(true);
+  const stoppedAfter = await ride(90, async () => !(await localLinkOn()));
+  check(stoppedAfter !== null, 'the local link shuts itself down after the internet returns, saving battery', `${stoppedAfter}s`);
+  check(!/Nearby|Reconnecting/.test(await statusChip()), 'the call is back on the internet', await statusChip());
 
   const foreground = memoryMb();
   console.log(`INFO  memory with screen on and map loaded: ${foreground.total} MB (${foreground.parts.join(' + ')})`);

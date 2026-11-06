@@ -151,6 +151,7 @@ try {
   // Tapping a stop still works alongside all this.
   await a.locator('.stop-row').nth(1).click();
   await a.waitForSelector('a:has-text("Get directions")');
+  check(await a.waitForSelector('.stop-pin.selected', { timeout: 3000 }).then(() => true, () => false), 'the opened stop stands out on the map');
   check((await a.locator('.stop-tools [aria-label^="Move"]').count()) === 2, 'an opened stop keeps its up and down buttons');
   await a.click('[aria-label="Move Bravo later"]');
   const afterArrows = ['Alpha', 'Delta', 'Bravo', 'Charlie'];
@@ -181,6 +182,14 @@ try {
   await openPlan(a);
   check(await sameAs(a, ['Bravo', 'Charlie']), 'the result survives a reload, so the server really has it');
   await a.screenshot({ path: `${outDir}/stops-final.png` });
+
+  // A long-press leaves a pin you can see, and cancelling takes it away.
+  await a.locator('#ride-map').click({ button: 'right', position: { x: 180, y: 80 } });
+  check(await a.waitForSelector('.stop-pin.dropped', { timeout: 3000 }).then(() => true, () => false), 'a long-press leaves a pin on the map');
+  await a.click('button:has-text("Cancel")');
+  await wait(200);
+  check((await a.locator('.stop-pin.dropped').count()) === 0, 'cancelling removes the pin');
+  check((await a.locator('.stop-pin').count()) === 2, 'every stop has its pin on the map');
 
   // A long plan: the row has to reach a place that is scrolled out of sight.
   const more = ['Echo', 'Foxtrot', 'Golf', 'Hotel', 'India', 'Juliet', 'Kilo', 'Lima', 'Mike', 'November'];

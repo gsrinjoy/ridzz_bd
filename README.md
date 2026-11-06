@@ -54,7 +54,7 @@ cd android && ./gradlew assembleDebug
 
 The APK is at `android/app/build/outputs/apk/debug/app-debug.apk`. It loads the deployed site, so web updates reach Android riders without a new APK. Only changes to the native code need one.
 
-For a release build to share, run `./gradlew assembleRelease`. It signs with the key in `~/.slipstream/`. **Back that folder up**: Android only accepts updates signed with the same key.
+For a release build to share, run `scripts/release-android.sh`, which builds the signed APK and publishes it at `/download/Slipstream.apk`. Everyone needs the same APK when the Android plugin changes, because the web code it talks to updates by itself. It signs with the key in `~/.slipstream/`. **Back that folder up**: Android only accepts updates signed with the same key.
 
 ## iPhone app
 
@@ -69,6 +69,7 @@ Pushing changes under `ios/` builds the app on GitHub's Macs and publishes `Slip
 | `node tests/e2e/webkit.mjs <outDir>` | The Safari engine at iPhone size, including the voice pipeline |
 | `node tests/e2e/ui-audit.mjs <outDir>` | Every rider screen at four phone sizes, for layout faults |
 | `node tests/e2e/nearby-voice.mjs` | The local voice path on real WebCodecs |
+| `node tests/e2e/stops.mjs <outDir>` | Rearranging and removing stops on Chromium and the Safari engine, stop types from phone to desktop, map pins |
 | `node tests/e2e/android.mjs` | The real APK on a booted emulator; needs an APK built with `APP_URL=http://localhost:8792` |
 | `OWNER=<password> node tests/e2e/live.mjs <url>` | A deployed site, end to end; removes its own test data |
 | `OWNER=<password> node tests/e2e/live-call.mjs <url> <outDir>` | A real call through the real voice relay and map, including failover |
