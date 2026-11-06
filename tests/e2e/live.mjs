@@ -69,6 +69,9 @@ await api('/api/auth/register', { method: 'POST', body: { name: 'Lock', email: l
 let lastStatus = 0;
 for (let i = 0; i < 6; i++) lastStatus = (await api('/api/auth/login', { method: 'POST', body: { email: lockEmail, password: 'guess-guess-guess' } })).status;
 check(lastStatus === 429, 'repeated wrong passwords lock the account for a while');
+await api('/api/admin/clear-lockouts', { method: 'POST', headers: owner, body: {} });
+const unlocked = await api('/api/auth/login', { method: 'POST', body: { email: lockEmail, password: 'live-password-9' } });
+check(unlocked.status === 200, 'the owner can clear a lockout');
 
 const search = await api('/api/places/search?q=Nandi%20Hills', { headers: as(a) });
 check(search.data?.length > 0, 'place search works', search.data?.[0]?.name);

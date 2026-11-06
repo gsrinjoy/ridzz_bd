@@ -279,6 +279,7 @@ export function AdminApp() {
       </div>
 
       {view === 'rides' && (rides.length ? rides.map((r) => <RideCard key={r.code} ride={r} act={act} />) : <p class="note">No rides right now.</p>)}
+      {view === 'users' && <button class="btn" onClick={() => act('clear-lockouts')}>Clear sign-in lockouts</button>}
       {view === 'users' && <section class="admin-card">{[...users].sort((a, b) => Number(a.approved) - Number(b.approved)).map((u) => <UserRow key={u.id} user={u} token={token} act={act} remove={remove} />)}</section>}
     </main>
   );

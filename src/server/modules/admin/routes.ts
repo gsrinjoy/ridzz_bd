@@ -84,6 +84,11 @@ export async function adminRoutes(request: Request, env: Env, path: string[]): P
     } satisfies AdminOverview);
   }
 
+  if (request.method === 'POST' && area === 'clear-lockouts') {
+    await dir.clearAllAttempts();
+    return json({ ok: true });
+  }
+
   if (request.method === 'POST' && area === 'voice-relay') {
     const { on } = await request.json<{ on?: boolean }>();
     await dir.setRelayForcedOff(on !== true);

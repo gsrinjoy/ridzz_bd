@@ -61,6 +61,7 @@ const sample = (p) =>
     return { recv, sent, live, pcs: window.__pcs.length, heapMb: Math.round(performance.memory.usedJSHeapSize / 1048576) };
   });
 
+await admin('clear-lockouts', { method: 'POST', body: '{}' });
 const a0 = await chromium.launch({ channel: 'chrome', headless: true, args: flags(resolve('tests/fixtures/speech.wav')) });
 const b0 = await chromium.launch({ channel: 'chrome', headless: true, args: flags() });
 let fail = 0;

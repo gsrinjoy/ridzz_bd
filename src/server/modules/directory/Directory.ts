@@ -199,6 +199,11 @@ export class Directory extends DurableObject<Env> {
     this.sql.exec('DELETE FROM attempts WHERE key = ?', key);
   }
 
+  /** For the owner, when a rider is locked out at the side of the road. */
+  clearAllAttempts(): void {
+    this.sql.exec('DELETE FROM attempts');
+  }
+
   getUser(id: string): UserRow | undefined {
     return this.user(id);
   }
