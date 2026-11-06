@@ -3,8 +3,9 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import type { LatLng } from '../../../shared/geo';
 import { DEFAULT_VIEW, LONG_PRESS_MS, riderLabel, riderPinClass, type MapEngine, type MapEvents } from './engine';
 
-// Built by scripts/make-map-style.mjs. MapLibre needs an absolute URL for the tile source inside it.
+// Built by scripts/make-map-style.mjs. Its links are relative to this site, which MapLibre will not accept as they are.
 const STYLE = '/map-style.json';
+const absolute = (url: string) => (url.startsWith('/') ? location.origin + url : url);
 
 const lngLat = (p: LatLng): [number, number] => [p.lo, p.la];
 
@@ -17,7 +18,6 @@ export function createBackupEngine(container: HTMLElement, start: LatLng | null,
   const view = start ? { center: start, zoom: 13 } : { ...DEFAULT_VIEW, zoom: 4 };
   const map = new maplibregl.Map({
     container,
-    style: STYLE,
     center: lngLat(view.center),
     zoom: view.zoom,
     // Phones gain little above 2x and pay for it in GPU power.
@@ -29,7 +29,10 @@ export function createBackupEngine(container: HTMLElement, start: LatLng | null,
     touchPitch: false,
     maxPitch: 0,
     attributionControl: { compact: true },
-    transformRequest: (url) => (url.startsWith('/') ? { url: location.origin + url } : { url }),
+    transformRequest: (url) => ({ url: absolute(url) }),
+  });
+  map.setStyle(STYLE, {
+    transformStyle: (_, next) => ({ ...next, sprite: absolute(next.sprite as string), glyphs: absolute(next.glyphs as string) }),
   });
   map.touchZoomRotate.disableRotation();
   map.on('error', (e) => console.warn('map', e.error?.message ?? e));

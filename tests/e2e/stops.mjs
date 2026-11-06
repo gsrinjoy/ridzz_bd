@@ -97,6 +97,10 @@ try {
   const bCtx = await iphone.newContext({ ...devices['iPhone 13'] });
   const b = await bCtx.newPage();
   const cdp = await aCtx.newCDPSession(a);
+  const mapErrors = [];
+  a.on('console', (m) => {
+    if (/^map /.test(m.text())) mapErrors.push(m.text().slice(0, 140));
+  });
 
   await signIn(a, 'Asha');
   await a.click('text=Plan a new ride');
@@ -196,6 +200,7 @@ try {
   check(order[0] === 'November', 'holding at the edge scrolls the panel, so the last stop can reach the top', order.join(' '));
   check(await sameAs(b, order), 'and the long reorder reaches the other rider');
   await a.screenshot({ path: `${outDir}/stops-long.png` });
+  check(mapErrors.length === 0, 'the map reports no errors', mapErrors[0]);
 
   // Every stop type on every screen, and no tab hiding anything by squeezing it to nothing.
   const collapsed = () => a.evaluate(() =>
