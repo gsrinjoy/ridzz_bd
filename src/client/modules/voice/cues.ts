@@ -9,6 +9,8 @@ export type Cue =
   | 'call-join'
   | 'call-leave'
   | 'call-cut'
+  | 'ride-start'
+  | 'ride-end'
   | 'rider-join'
   | 'rider-leave'
   | 'reconnecting'
@@ -33,6 +35,8 @@ export const CUES: Record<Cue, CueSound> = {
   reconnecting: { notes: [[440, 60], [440, 60]], level: 0.09 },
   reconnected: { notes: [[523, 70], [659, 70], [784, 120]], level: 0.12 },
   'call-cut': { notes: [[659, 100], [494, 100], [330, 150]], level: 0.16 },
+  'ride-start': { notes: [[392, 110], [523, 110], [659, 110], [784, 180]], level: 0.16 },
+  'ride-end': { notes: [[784, 110], [659, 110], [523, 110], [392, 180]], level: 0.16 },
   mute: { notes: [[330, 50]], level: 0.08 },
   unmute: { notes: [[494, 50]], level: 0.08 },
   alert: { notes: [[880, 120], [880, 120]], level: 0.22 },

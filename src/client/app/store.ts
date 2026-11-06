@@ -50,6 +50,8 @@ export interface Preferences {
   batterySaver: boolean;
   spokenAlerts: boolean;
   callSounds: boolean;
+  /** Off saves the battery that scanning costs; Auto starts only when the internet is lost. */
+  nearbyMode: 'auto' | 'off';
   /** Per-rider playback level, 0..1.5, by rider id. */
   volumes: Record<string, number>;
 }
@@ -62,6 +64,7 @@ export const prefs = signal<Preferences>({
   batterySaver: false,
   spokenAlerts: true,
   callSounds: true,
+  nearbyMode: 'auto',
   volumes: {},
   ...read<Partial<Preferences>>(PREFS, {}),
 });
@@ -81,6 +84,12 @@ export const droppedPin = signal<LatLng | null>(null);
 export const route = signal<RouteResult | null>(null);
 /** Opens the planner on arrival: just created a ride, or joined one with a plan. */
 export const openPlanner = signal(false);
+/** Web riders must tap to start audio, so a started ride asks them to. */
+export const callPrompt = signal(false);
+/** The log to show when the ride finishes. */
+export const summaryId = signal<string | null>(null);
+/** Stops this rider has reached on the ride. */
+export const reachedStops = signal<string[]>([]);
 
 export type LinkState = 'connecting' | 'live' | 'retrying';
 export const link = signal<LinkState>('connecting');
@@ -102,11 +111,29 @@ export const meter = signal({ level: -90, wind: 0, speech: 0 });
 export const myPosition = signal<Position | null>(null);
 export const locationError = signal<string | null>(null);
 
+/** Riders reachable over the local radio link. Null while that link is off. */
+export const nearbyPeers = signal<number | null>(null);
 export const mapProvider = signal<'mappls' | 'backup' | null>(null);
 export const mapReady = signal(false);
 export const rideMode = signal(false);
 export const incomingAlert = signal<{ id: string; name: string; kind: AlertKind; pos?: Position; at: number } | null>(null);
 export const pendingShare = signal<string | null>(null);
+
+export const phase = computed(() => ride.value?.phase ?? 'planning');
+
+/** Any rider can act when the host is away, so a dead phone cannot strand the group. */
+export const canControl = computed(() => {
+  const r = ride.value;
+  if (!r) return false;
+  return r.host === session.value?.riderId || !riders.value[r.host]?.online;
+});
+
+export const hostName = computed(() => {
+  const r = ride.value;
+  return r ? (riders.value[r.host]?.name ?? 'the host') : 'the host';
+});
+
+export const nextStop = computed(() => stops.value.find((s) => !reachedStops.value.includes(s.id)));
 
 export const me = computed(() => {
   const s = session.value;

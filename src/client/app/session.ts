@@ -1,17 +1,20 @@
-import { batch, effect } from '@preact/signals';
-import type { AlertKind, ClientMessage, LocTuple, Position, RideInfo, Rider, ServerMessage, VoiceConfig } from '../../shared/protocol';
+import { batch, effect, untracked } from '@preact/signals';
+import { distanceM } from '../../shared/geo';
+import type { AlertKind, ClientMessage, LocTuple, Position, RideInfo, RidePhase, Rider, ServerMessage, VoiceConfig } from '../../shared/protocol';
 import { LocationTracker } from '../modules/location/tracker';
+import { NearbyLink } from '../modules/nearby/link';
+import { LocalEncoder, LocalPlayer, localVoiceSupported } from '../modules/nearby/localVoice';
 import { RideShell } from '../modules/power/rideShell';
 import { ScreenWake } from '../modules/power/wakeLock';
 import { RideSocket } from '../modules/ride/socket';
-import { finishLog, flushLogs, restoreActive, saveActive } from '../modules/stats/logStore';
+import { finishLog, flushLogs, recoverActive, restoreActive, saveActive } from '../modules/stats/logStore';
 import { localDate, RideRecorder } from '../modules/stats/recorder';
 import { CueDirector } from '../modules/voice/cueDirector';
 import { speak, unlockSpeech, type Cue } from '../modules/voice/cues';
 import { VoiceEngine } from '../modules/voice/engine';
 import type { SfuApi, TracksResponse } from '../modules/voice/transports/sfu';
-import { fetchFriends, fetchRoute } from '../modules/ride/api';
-import { friends, openPlanner, route, incomingAlert, isAndroidApp, isIos, link, locationError, me, meter, myPosition, notice, prefs, pttHeld, ride, riders, session, setSession, stops, transmitting, voice, type Session } from './store';
+import { fetchFriends, fetchRoute, signOutSession } from '../modules/ride/api';
+import { account, callPrompt, friends, nearbyPeers, openPlanner, reachedStops, route, summaryId, incomingAlert, isAndroidApp, isIos, link, locationError, me, meter, myPosition, notice, prefs, pttHeld, ride, riders, session, setAccount, setSession, stops, transmitting, voice, type Session } from './store';
 
 /** Call status sounds can be turned off. Alerts and SOS always play. */
 function callCue(cue: Cue): void {
@@ -36,12 +39,85 @@ let recorder: RideRecorder | undefined;
 let director: CueDirector | undefined;
 let lastCheckpoint = 0;
 let plannerShown = false;
+let currentPhase: RidePhase | undefined;
 let routeTimer: ReturnType<typeof setTimeout> | undefined;
 let routeKey = '';
 let nativeLocation: { remove(): Promise<void> } | undefined;
 const wake = new ScreenWake();
 
-export const send = (msg: ClientMessage) => socket?.send(msg);
+export const send = (msg: ClientMessage) => {
+  socket?.send(msg);
+  // With the internet gone, the things riders need most still reach those in range.
+  if (nearby && link.peek() !== 'live' && (msg.t === 'loc' || msg.t === 'alert' || msg.t === 'talk')) {
+    nearby.sendControl({ id: session.peek()?.riderId, msg });
+  }
+};
+
+/** Scanning radios cost battery, so the link starts only after the internet has clearly gone. */
+const NEARBY_AFTER_MS = 6000;
+const NEARBY_LINGER_MS = 30_000;
+
+let nearby: NearbyLink | undefined;
+let nearbyTimer: ReturnType<typeof setTimeout> | undefined;
+let localEncoder: LocalEncoder | undefined;
+const localPlayers = new Map<number, LocalPlayer>();
+
+function onNearbyControl(json: unknown): void {
+  const { id, msg } = json as { id: string; msg: ClientMessage };
+  if (msg.t === 'loc') applyLocations([[id, msg.la, msg.lo, msg.sp, msg.hd, msg.ts]]);
+  if (msg.t === 'talk') onMessage({ t: 'talk', id, on: msg.on });
+  if (msg.t === 'alert') onMessage({ t: 'alert', id, kind: msg.kind, at: Date.now() });
+}
+
+function onNearbyAudio(sender: number, packet: Uint8Array): void {
+  const out = engine?.localOutput;
+  if (!out) return;
+  let player = localPlayers.get(sender);
+  if (!player) {
+    player = new LocalPlayer(out.ctx, out.destination);
+    localPlayers.set(sender, player);
+  }
+  player.push(packet);
+}
+
+async function startNearby(): Promise<void> {
+  const s = session.peek();
+  if (nearby || !s || !isAndroidApp() || prefs.peek().nearbyMode === 'off') return;
+  const created = new NearbyLink(s.riderId, {
+    onAudio: onNearbyAudio,
+    onControl: onNearbyControl,
+    onPeers: (count) => (nearbyPeers.value = count),
+  });
+  nearby = created;
+  try {
+    await created.start(s.code, account.peek()?.name ?? 'Rider');
+    nearbyPeers.value = 0;
+    if (localVoiceSupported() && engine) {
+      localEncoder = new LocalEncoder((data) => created.sendAudio(data));
+      engine.setLocalTap((samples) => localEncoder?.push(samples));
+    }
+  } catch (e) {
+    console.warn('nearby start', e);
+    nearby = undefined;
+  }
+}
+
+function stopNearby(): void {
+  engine?.setLocalTap(undefined);
+  localEncoder?.close();
+  localEncoder = undefined;
+  localPlayers.forEach((p) => p.close());
+  localPlayers.clear();
+  void nearby?.stop();
+  nearby = undefined;
+  nearbyPeers.value = null;
+}
+
+function watchInternet(healthy: boolean): void {
+  clearTimeout(nearbyTimer);
+  if (!healthy && !nearby) nearbyTimer = setTimeout(() => void startNearby(), NEARBY_AFTER_MS);
+  if (healthy && nearby) nearbyTimer = setTimeout(stopNearby, NEARBY_LINGER_MS);
+}
 
 function wsUrl(s: Session): string {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -158,7 +234,18 @@ function planRoute(): void {
 /** Crash insurance: a few KB every few minutes, never per fix. */
 const CHECKPOINT_MS = 180_000;
 
+const REACHED_M = 250;
+
+function markReached(pos: Position): void {
+  const done = reachedStops.peek();
+  const fresh = stops.peek().filter((s) => !done.includes(s.id) && distanceM(pos, s) <= REACHED_M);
+  if (fresh.length) reachedStops.value = [...done, ...fresh.map((s) => s.id)];
+}
+
+/** Only a started ride is recorded, so everyone's stats cover the same ride. */
 function record(pos: Position, accuracyM: number | undefined, code: string): void {
+  if (ride.peek()?.phase !== 'riding') return;
+  markReached(pos);
   if (recorder && recorder.log.date !== localDate(pos.ts)) {
     // Past midnight: the day's log is done, and the rest starts a new one.
     void finishLog(recorder.log);
@@ -177,9 +264,51 @@ function record(pos: Position, accuracyM: number | undefined, code: string): voi
   }
 }
 
+/** Everything a ride's phase changes, in one place. It also runs for riders who arrive mid-ride. */
+function enterPhase(next: RidePhase): void {
+  const previous = currentPhase;
+  if (next === previous) return;
+  currentPhase = next;
+  tracker?.setSaver(next === 'planning' || prefs.peek().batterySaver);
+
+  if (next === 'riding') {
+    if (previous === 'planning') {
+      engine?.cue('ride-start');
+      if (prefs.peek().spokenAlerts) speak('Ride started');
+    }
+    joinRideCall();
+  }
+  if (next === 'finished') void finishRide();
+}
+
+/** The Android app can start audio by itself. A browser needs one tap, so it asks. */
+function joinRideCall(): void {
+  if (engine) return;
+  if (isAndroidApp()) void startVoice();
+  else callPrompt.value = true;
+}
+
+async function finishRide(): Promise<void> {
+  callPrompt.value = false;
+  const log = recorder?.log;
+  recorder = undefined;
+  stopVoice('ride-end');
+  tracker?.stop();
+  if (log) await finishLog(log);
+  else await recoverActive();
+  summaryId.value = log?.id ?? '';
+}
+
+export const startRide = () => send({ t: 'ride.start' });
+export const endRide = () => send({ t: 'ride.finish' });
+
+let friendTimer: ReturnType<typeof setInterval> | undefined;
+const FRIEND_POLL_MS = 60_000;
+
 export function connect(s: Session): void {
   disconnect();
   link.value = 'connecting';
+  void recoverActive(`${localDate(Date.now())}:${s.code}`);
   socket = new RideSocket(wsUrl(s), onMessage, (state) => {
     link.value = state;
   });
@@ -191,24 +320,36 @@ export function connect(s: Session): void {
     },
     (pos) => send({ t: 'loc', ...pos }),
     (message) => (locationError.value = message),
-    prefs.value.batterySaver,
+    // Low power until a ride starts: precise tracking is for riding, not for waiting.
+    true,
   );
   tracker.start();
   void refreshFriends();
   void flushLogs();
+  // A request should show on the Friends tab during a ride too. Skipped while hidden, to save the radio.
+  clearInterval(friendTimer);
+  friendTimer = setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshFriends();
+  }, FRIEND_POLL_MS);
   disposers.push(
     effect(() => {
       engine?.syncRiders(Object.values(riders.value));
     }),
     effect(planRoute),
     effect(() => {
+      const next = ride.value?.phase;
+      if (next) untracked(() => enterPhase(next));
+    }),
+    effect(() => {
       const healthy = link.value === 'live' && voice.value.status !== 'recovering';
       director?.setLink(healthy);
+      untracked(() => watchInternet(healthy));
     }),
   );
 }
 
 export function disconnect(farewell?: Cue): void {
+  clearInterval(friendTimer);
   disposers.forEach((d) => d());
   disposers = [];
   stopVoice(farewell);
@@ -220,6 +361,10 @@ export function disconnect(farewell?: Cue): void {
 export function leaveRide(farewell: Cue = 'call-leave'): void {
   if (recorder) void finishLog(recorder.log);
   recorder = undefined;
+  currentPhase = undefined;
+  callPrompt.value = false;
+  summaryId.value = null;
+  reachedStops.value = [];
   disconnect(farewell);
   batch(() => {
     setSession(null);
@@ -232,10 +377,17 @@ export function leaveRide(farewell: Cue = 'call-leave'): void {
   routeKey = '';
 }
 
+export async function signOut(): Promise<void> {
+  if (session.peek()) leaveRide();
+  await signOutSession().catch(() => undefined); // Offline: the session still expires by itself.
+  setAccount(null);
+}
+
 /** Must run inside a tap: browsers only start audio from a user gesture. */
 export async function startVoice(): Promise<void> {
   const s = session.value;
   if (!s || engine) return;
+  callPrompt.value = false;
   // These two must stay above the first await: Safari drops the gesture after it.
   const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
   void ctx.resume();
@@ -292,6 +444,8 @@ async function startNativeRide(): Promise<void> {
 }
 
 export function stopVoice(farewell?: Cue): void {
+  stopNearby();
+  clearTimeout(nearbyTimer);
   if (farewell) callCue(farewell);
   director?.destroy();
   director = undefined;
@@ -337,7 +491,8 @@ effect(() => {
   engine?.setPtt(pttHeld.value);
 });
 effect(() => {
-  if (tracker) tracker.saver = prefs.value.batterySaver;
+  const saver = prefs.value.batterySaver;
+  untracked(() => tracker?.setSaver(saver || ride.value?.phase !== 'riding'));
 });
 
 export const setMeters = (on: boolean) => engine?.setMeters(on);

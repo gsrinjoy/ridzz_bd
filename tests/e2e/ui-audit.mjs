@@ -1,13 +1,25 @@
 // Walks every rider screen at several phone sizes and reports layout faults.
 // Usage: node tests/e2e/ui-audit.mjs <outDir>
 import { spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { chromium } from 'playwright-core';
 
 const PORT = 8789;
 const BASE = `http://127.0.0.1:${PORT}`;
 const outDir = resolve(process.argv[2] ?? '.');
 const SIZES = [[320, 568], [360, 740], [390, 844], [412, 915]];
+const signUp = async (page, name) => {
+  await page.click('text=Create an account');
+  await page.fill('#name', name);
+  await page.fill('#email', `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`);
+  await page.fill('#password', 'test-password-1');
+  await page.click('button:has-text("Create account")');
+  await page.click('text=I saved it');
+  await page.waitForSelector('#code');
+};
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function audit() {
@@ -71,7 +83,7 @@ function audit() {
   return [...new Set(faults)];
 }
 
-const server = spawn('pnpm', ['exec', 'wrangler', 'dev', '--port', String(PORT)], { stdio: 'ignore' });
+const server = spawn('pnpm', ['exec', 'wrangler', 'dev', '--port', String(PORT), '--persist-to', mkdtempSync(join(tmpdir(), 'slipstream-'))], { stdio: 'ignore' });
 for (let i = 0; i < 80 && !(await fetch(BASE).then((r) => r.ok).catch(() => false)); i++) await wait(500);
 
 const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', '--autoplay-policy=no-user-gesture-required'] });
@@ -92,7 +104,14 @@ for (const [width, height] of SIZES) {
   };
 
   await page.goto(BASE);
-  await page.fill('#name', 'Srinjoy');
+  await step('sign-in', true);
+  await page.tap('text=Create an account');
+  await step('register', true);
+  await page.tap('text=Back to sign in');
+  await page.tap('text=Forgot password?');
+  await step('recover', true);
+  await page.tap('text=Back to sign in');
+  await signUp(page, 'Srinjoy');
   await step('home', true);
   await page.tap('text=Plan a new ride');
   await page.waitForSelector('.topbar');
@@ -102,8 +121,9 @@ for (const [width, height] of SIZES) {
   const sockets = [];
   for (const [name, color, la, lo, sp] of friends) {
     const post = (path, body, headers = {}) => fetch(`${BASE}${path}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) }).then((r) => r.json());
-    const a = await post('/api/accounts', { name, color });
-    const j = await post(`/api/rides/${code}/join`, {}, { 'x-user': a.userId, 'x-user-token': a.token });
+    // A made-up address per seeded rider, as the sign-up limit counts per network.
+    const { account: a } = await post('/api/auth/register', { name, color, email: `${Math.random().toString(36).slice(2)}@test.example`, password: 'test-password-1' }, { 'cf-connecting-ip': `10.0.0.${Math.floor(Math.random() * 250)}` });
+    const j = await post(`/api/rides/${code}/join`, {}, { authorization: `Bearer ${a.token}` });
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}/api/rides/${code}/ws?rider=${j.riderId}&token=${j.token}`);
     await new Promise((r) => (ws.onopen = r));
     ws.send(JSON.stringify({ t: 'loc', la, lo, sp, hd: 90, ts: Date.now() }));
@@ -141,8 +161,14 @@ for (const [width, height] of SIZES) {
   await page.tap('text=Ride mode (saves battery)');
   await step('ride-mode', true);
   await page.tap('.ridemode-foot .btn');
-  await page.tap('text=Leave ride').catch(() => undefined);
-  await page.waitForSelector('#name');
+  await page.tap('[role=tab]:has-text("Plan")').catch(() => undefined);
+  await page.tap('button:has-text("Start ride")');
+  await wait(900);
+  await step('riding', true);
+  await page.tap('[role=tab]:has-text("Settings")');
+  await step('riding-settings', true);
+  await page.tap('text=Leave ride');
+  await page.waitForSelector('#code');
   await wait(500);
   await step('home-after', true);
   await page.tap('text=My rides and stats');

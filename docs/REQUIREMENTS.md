@@ -1,0 +1,85 @@
+# Requirements audit
+
+Every requirement raised during the build, with its status and how it was proven.
+
+- **Done**: built and tested.
+- **Needs key**: built, and waiting for a key only the account owner can create. See the setup guide.
+- **Needs device**: built, but only real hardware can prove it.
+- **Not possible**: a platform rule prevents it. The closest alternative is listed.
+
+Tests: `unit` (116), `call` (two real Chrome browsers over WebRTC), `webkit` (Safari engine), `layout` (four phone sizes), `android` (the real APK on Android 15), `live` (the deployed site).
+
+## Voice and call
+
+| Requirement | Status | Proof or note |
+|---|---|---|
+| Group voice chat, like Discord | Done | call: audio captured at the receiver |
+| Noise cancelling for wind | Done | Measured on simulated wind. Needs a road test |
+| Engine and traffic noise | Done | Measured on simulated engines, traffic and horns. Horns can open the mic briefly |
+| Crisp voice at high speed | Needs device | 100% of words on clean speech, 73% on a highway mix, simulated. Noise filter setting lets riders tune it |
+| Low latency | Needs device | Direct links measured here. Real figures need real networks |
+| Auto push-to-talk | Done | unit and call: gate opens on speech, stays closed on wind |
+| Mute a person for yourself only | Done | call: stored on the phone; the muted rider keeps sending |
+| Call deck: mute, end call, participants, volume | Done | call |
+| Change speaker and mic, Bluetooth | Done | call and android on speaker. Bluetooth needs a real headset. iPhone: Control Center |
+| Audio cues: join, leave, reconnect, call cut | Done | unit and call |
+| Voice works on mobile data | Needs key | Cloudflare voice relay and TURN |
+
+## Map, tracking and planning
+
+| Requirement | Status | Proof or note |
+|---|---|---|
+| Mappls in-app map | Needs key | Adapter unit-tested. Falls back automatically until the key is set |
+| Button hands off to Google Maps | Done | call: two-wheeler navigation link. Free, no key |
+| Ride planner: total ride, stops, group sync | Done | call: name, time, stops, order reach other riders |
+| Search for places | Done | live: free search works |
+| Search from Google Maps | Done | Search on Google Maps button, then share or paste back |
+| Google search inside the app | Needs key | Built and unit-tested. Google requires a billing account, so this is the owner's choice |
+| Tap a stop for directions | Done | call |
+| Check riders' locations | Done | call and live |
+| Directions to a selected rider | Done | call |
+
+## Ride lifecycle
+
+| Requirement | Status | Proof or note |
+|---|---|---|
+| Start ride for the whole group | Done | call and live |
+| Recording begins for all at Start | Done | call: nothing recorded before it |
+| Call joins with the ride | Done | android: automatic. Web and iPhone: one tap, a browser rule |
+| Map behaves differently while riding | Done | Follows the group, shows next stop and timer |
+| End ride, summary for everyone | Done | call |
+
+## Stats, accounts, security
+
+| Requirement | Status | Proof or note |
+|---|---|---|
+| Per-rider daily stats: speed map, averages, distance, speed log | Done | unit and call |
+| Stats survive closing the app | Done | Recovered and uploaded on next launch |
+| Registration and sign-in | Done | call and live |
+| Passwords hashed, sessions revocable, lockout | Done | unit and live |
+| Password recovery with no paid email | Done | call: recovery code. Owner can also reset |
+| Friend requests | Done | call |
+| Invitation link, QR, WhatsApp | Done | call |
+| Owner portal: view and manage everything | Done | call and live: rides, riders, users, stats, block, reset |
+| Security headers, rate limits, origin checks | Done | live |
+
+## Platform, quality, delivery
+
+| Requirement | Status | Proof or note |
+|---|---|---|
+| Everything free | Done | Cloudflare free plan, free services. Google search is opt-in only |
+| Android APK to share | Done | Signed release build, tested on Android 15 |
+| Android permissions and SDK setup | Done | android: first-run prompt, service types, screen-off capabilities |
+| Google Play services | Done | android: Nearby starts on real Play services |
+| Screen-off voice and GPS on Android | Done | android: 21 s with the screen off, not killed |
+| iPhone web parity | Needs device | webkit passes, including the voice chain. A real iPhone has not been tested |
+| iPhone screen-off voice and GPS | Not possible | Apple stops web apps when locked, even when installed from Chrome. Ride mode on a mount, or a native app |
+| Nearby voice, Android | Needs device | Built. Starts on Play services and voice path tested, but radio link needs two phones |
+| Nearby voice, iPhone and web | Not possible | No website can use it, and an iPhone app needs Apple's paid account |
+| Low battery | Needs device | Designed for it throughout. Only a real ride can measure it |
+| Low RAM | Done | android: about 176 to 210 MB in the pocket |
+| Modular monolith, 10 riders | Done | Enforced at 10 on the server |
+| Cloudflare deployment | Done | live at https://ridzz.ridzz.workers.dev |
+| Premium mobile UI, no glitches | Done | layout: zero faults at four phone sizes, plus visual review |
+| REA installed | Done | Connected after restarting Claude Code |
+| Reverse-engineer Sena and Riding Verse | Partly | Public listings and reviews only. APKs could not be downloaded; needs copies from a phone |

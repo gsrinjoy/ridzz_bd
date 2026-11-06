@@ -17,11 +17,13 @@ export type WorkletCommand =
   | { type: 'speed'; kmh: number }
   | { type: 'sensitivity'; value: number }
   | { type: 'noiseFilter'; filter: NoiseFilter }
-  | { type: 'meters'; on: boolean };
+  | { type: 'meters'; on: boolean }
+  | { type: 'tap'; on: boolean };
 
 export type WorkletEvent =
   | { type: 'tx'; on: boolean }
-  | { type: 'meter'; level: number; wind: number; speech: number };
+  | { type: 'meter'; level: number; wind: number; speech: number }
+  | { type: 'pcm'; samples: Float32Array };
 
 class VoiceProcessor extends AudioWorkletProcessor {
   private readonly chain: VoiceChain;
@@ -35,6 +37,7 @@ class VoiceProcessor extends AudioWorkletProcessor {
   private frames = 0;
   private transmitting = false;
   private meters = false;
+  private tap = false;
 
   constructor(options: { processorOptions: { wasm: ArrayBuffer } }) {
     super();
@@ -63,6 +66,9 @@ class VoiceProcessor extends AudioWorkletProcessor {
         break;
       case 'meters':
         this.meters = c.on;
+        break;
+      case 'tap':
+        this.tap = c.on;
         break;
     }
   }
@@ -97,6 +103,10 @@ class VoiceProcessor extends AudioWorkletProcessor {
     if (r.transmit !== this.transmitting) {
       this.transmitting = r.transmit;
       this.port.postMessage({ type: 'tx', on: r.transmit } satisfies WorkletEvent);
+    }
+    if (this.tap && r.transmit) {
+      const samples = this.out.slice();
+      this.port.postMessage({ type: 'pcm', samples } satisfies WorkletEvent, [samples.buffer]);
     }
     if (this.meters && ++this.frames % METER_EVERY === 0) {
       this.port.postMessage({ type: 'meter', level: r.levelDb, wind: r.wind, speech: r.probability } satisfies WorkletEvent);

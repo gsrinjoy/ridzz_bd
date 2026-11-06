@@ -25,12 +25,6 @@ export async function verifyRider(secret: string, code: string, riderId: string,
   return safeEqual(await signRider(secret, code, riderId), token);
 }
 
-export const signUser = (secret: string, userId: string) => sign(secret, `user:${userId}`);
-
-export async function verifyUser(secret: string, userId: string, token: string): Promise<boolean> {
-  return safeEqual(await signUser(secret, userId), token);
-}
-
 // No 0/O/1/I/L: codes get read aloud at fuel stops.
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 

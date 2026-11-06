@@ -8,9 +8,10 @@ import { RidersPanel } from '../modules/riders/RidersPanel';
 import { SettingsPanel } from '../modules/settings/SettingsPanel';
 import { PlanPanel } from '../modules/stops/PlanPanel';
 import { CallDeck } from '../modules/voice/CallDeck';
-import { Crosshair, Group, Mic, MicOff, Moon, Phone, Pin, Share, Sliders, UserPlus, Users } from '../ui/icons';
-import { startVoice } from './session';
-import { droppedPin, friends, openPlanner, selectedStopId, incomingAlert, isAndroidApp, isIos, link, locationError, mapReady, myPosition, otherRiders, pendingShare, prefs, pttHeld, rideMode, selectedRiderId, session, setPrefs, stops, transmitting, voice } from './store';
+import { Crosshair, Group, Mic, MicOff, Moon, Navigate, Phone, Pin, Share, Sliders, UserPlus, Users } from '../ui/icons';
+import { Detail } from '../modules/stats/StatsScreen';
+import { leaveRide, startRide, startVoice } from './session';
+import { callPrompt, canControl, nearbyPeers, droppedPin, friends, hostName, nextStop, openPlanner, phase, ride, selectedStopId, summaryId, incomingAlert, isAndroidApp, isIos, link, locationError, mapReady, myPosition, otherRiders, pendingShare, prefs, pttHeld, rideMode, selectedRiderId, session, setPrefs, stops, transmitting, voice } from './store';
 
 type Tab = 'call' | 'riders' | 'plan' | 'friends' | 'settings';
 
@@ -19,7 +20,8 @@ function LinkChip() {
   const v = voice.value;
   const online = otherRiders.value.filter((r) => r.online).length + 1;
   const healthy = l === 'live' && v.status !== 'recovering';
-  const text = l === 'connecting' ? 'Connecting' : !healthy ? 'Reconnecting' : `${online} online`;
+  const peers = nearbyPeers.value;
+  const text = peers !== null && !healthy ? `Nearby · ${peers}` : l === 'connecting' ? 'Connecting' : !healthy ? 'Reconnecting' : `${online} online`;
   return (
     <span class="chip num" role="status">
       <span class={`dot ${healthy ? 'live' : 'warn'}`} />
@@ -35,6 +37,76 @@ function InviteChip({ onOpen }: { onOpen: () => void }) {
     <button class="chip num" aria-label={`Invite riders to ride ${code}`} onClick={onOpen}>
       <Share /> Invite · {code}
     </button>
+  );
+}
+
+function clock(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` : `${m}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** Replaces the invite chip while riding: the two things a rider glances for. */
+function RideHud({ onOpen }: { onOpen: () => void }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const next = nextStop.value;
+  const here = myPosition.value;
+  const started = ride.value?.startedAt;
+  return (
+    <button class="chip hud num" aria-label="Open the ride plan" onClick={onOpen}>
+      <span class="hud-time">{started ? clock(now - started) : '0:00'}</span>
+      {next && <span class="hud-next">{next.name}{here ? ` · ${formatDistance(distanceM(here, next))}` : ''}</span>}
+    </button>
+  );
+}
+
+function StartBar() {
+  if (canControl.value) {
+    return (
+      <div class="start-bar">
+        <button class="btn primary block" onClick={startRide}><Navigate /> Start ride</button>
+      </div>
+    );
+  }
+  return <div class="start-bar waiting" role="status">Waiting for {hostName.value} to start the ride</div>;
+}
+
+/** Browsers refuse to start audio without a tap, so a started ride asks for exactly one. */
+function CallPrompt() {
+  return (
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Ride started">
+      <div class="sheet-card">
+        <h2>Ride started</h2>
+        <p class="note">Tap to join the group call.</p>
+        <button class="btn primary block" onClick={() => void startVoice()}><Phone /> Join the call</button>
+        <button class="btn block" onClick={() => (callPrompt.value = false)}>Not now</button>
+      </div>
+    </div>
+  );
+}
+
+function RideSummary() {
+  const id = summaryId.value;
+  if (id) {
+    return (
+      <main class="ride-stats">
+        <Detail id={id} onBack={() => leaveRide()} backLabel="Done" />
+      </main>
+    );
+  }
+  return (
+    <main class="home">
+      <div class="home-card">
+        <h2 class="stats-title">Ride finished</h2>
+        <p class="note">Nothing was recorded on this phone for this ride.</p>
+        <button class="btn primary block" onClick={() => leaveRide()}>Done</button>
+      </div>
+    </main>
   );
 }
 
@@ -57,7 +129,8 @@ function TalkBar() {
   if (v.status === 'off' || v.status === 'blocked') {
     return (
       <div class="talkbar">
-        <button class="btn primary block" onClick={() => void startVoice()}>
+        {/* Before the ride starts, Start ride is the main action and this is optional. */}
+        <button class={`btn block ${phase.value === 'planning' ? '' : 'primary'}`} onClick={() => void startVoice()}>
           <Phone /> {v.status === 'blocked' ? 'Allow the microphone, then tap' : 'Join the call'}
         </button>
       </div>
@@ -175,6 +248,12 @@ export function RideScreen() {
     openPlanner.value = false;
   }, [openPlanner.value]);
 
+  // Once moving, the map is what matters, so panels get out of its way.
+  useEffect(() => {
+    if (phase.value === 'riding') setTab(null);
+  }, [phase.value]);
+
+  if (phase.value === 'finished') return <RideSummary />;
   if (rideMode.value) return <RideMode />;
 
   const toggle = (t: Tab) => setTab(tab === t ? null : t);
@@ -193,7 +272,7 @@ export function RideScreen() {
         {MapView && <MapView handle={handle} />}
         {!mapReady.value && <div class="map-empty" role="status">Loading map…</div>}
         <div class="topbar">
-          <InviteChip onOpen={() => { setTab('riders'); setInviting(true); }} />
+          {phase.value === 'riding' ? <RideHud onOpen={() => setTab('plan')} /> : <InviteChip onOpen={() => { setTab('riders'); setInviting(true); }} />}
           <span class="spacer" />
           <LinkChip />
         </div>
@@ -206,6 +285,7 @@ export function RideScreen() {
       </div>
       <div class="dock">
         <Banner />
+        {phase.value === 'planning' && <StartBar />}
         <TalkBar />
         <nav class="tabs" role="tablist">
           {tabs.map(([id, label, Icon, count]) => (
@@ -232,6 +312,7 @@ export function RideScreen() {
           </section>
         )}
       </div>
+      {callPrompt.value && <CallPrompt />}
     </div>
   );
 }

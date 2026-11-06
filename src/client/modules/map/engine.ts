@@ -22,6 +22,8 @@ export interface MapEvents {
   onStopTap(id: string): void;
   onLongPress(at: LatLng): void;
   onReady(): void;
+  /** The rider moved the map by hand, so following pauses. */
+  onUserPan(): void;
 }
 
 /** Everything the app asks of a map. A provider implements this and nothing else. */

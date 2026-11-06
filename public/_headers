@@ -1,0 +1,7 @@
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://*.mappls.com https://*.mapmyindia.com; style-src 'self' 'unsafe-inline' https://*.mappls.com; img-src 'self' data: blob: https://tiles.openfreemap.org https://*.mappls.com https://*.mapmyindia.com; font-src 'self' data: https://*.mappls.com; connect-src 'self' wss: https://tiles.openfreemap.org https://*.mappls.com https://*.mapmyindia.com; worker-src 'self' blob:; child-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+  Permissions-Policy: microphone=(self), geolocation=(self), screen-wake-lock=(self), camera=(), payment=(), usb=()

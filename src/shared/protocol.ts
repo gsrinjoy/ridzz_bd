@@ -39,11 +39,19 @@ export interface Stop {
   addedBy: string;
 }
 
+/** planning: being prepared. riding: recording, for everyone at once. finished: saved. */
+export type RidePhase = 'planning' | 'riding' | 'finished';
+
 export interface RideInfo {
   code: string;
   name: string;
+  phase: RidePhase;
+  /** The rider who controls starting and ending. */
+  host: string;
   /** When the group meets, epoch ms. */
   startsAt?: number;
+  startedAt?: number;
+  endedAt?: number;
 }
 
 export type ClientMessage =
@@ -53,6 +61,8 @@ export type ClientMessage =
   | { t: 'rtc'; to: string; data: unknown }
   | { t: 'alert'; kind: AlertKind }
   | { t: 'ride.update'; name?: string; startsAt?: number | null }
+  | { t: 'ride.start' }
+  | { t: 'ride.finish' }
   | { t: 'stop.add'; stop: Omit<Stop, 'id' | 'addedBy'> }
   | { t: 'stop.remove'; id: string }
   | { t: 'stop.order'; ids: string[] };
@@ -79,13 +89,19 @@ export interface JoinResponse {
   token: string;
 }
 
-/** A person, kept across rides. There is no sign-up: the token on the device is the login. */
+/** A signed-in person. The token is a revocable session, not a permanent key. */
 export interface Account {
   userId: string;
   token: string;
   name: string;
   color: string;
   friendCode: string;
+}
+
+/** Returned once, at sign-up or recovery. The code is never stored in readable form. */
+export interface Registered {
+  account: Account;
+  recoveryCode: string;
 }
 
 export interface FriendInfo {
@@ -113,6 +129,7 @@ export interface FriendsView {
 }
 
 export interface AdminUser extends FriendInfo {
+  email: string;
   createdAt: number;
   lastSeen: number;
   blocked: boolean;
@@ -133,6 +150,7 @@ export interface AdminRider {
 export interface AdminRide {
   code: string;
   name: string;
+  phase: RidePhase;
   owner: string;
   createdAt: number;
   lastActive: number;

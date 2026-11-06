@@ -18,6 +18,16 @@ const check = (ok, label, detail = '') => {
   if (!ok) failures++;
 };
 
+const signUp = async (page, name) => {
+  await page.click('text=Create an account');
+  await page.fill('#name', name);
+  await page.fill('#email', `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`);
+  await page.fill('#password', 'test-password-1');
+  await page.click('button:has-text("Create account")');
+  await page.click('text=I saved it');
+  await page.waitForSelector('#code');
+};
+
 // Runs before page scripts: exposes peer connections and feeds a scripted GPS.
 function instrument({ lat, lon, kmh }) {
   window.__pcs = [];
@@ -30,10 +40,7 @@ function instrument({ lat, lon, kmh }) {
       this.addEventListener('track', (e) => {
         void (async () => {
           const ctx = new AudioContext({ sampleRate: 48000 });
-          const code = `registerProcessor('tap', class extends AudioWorkletProcessor {
-            process(i) { if (i[0][0]) this.port.postMessage(i[0][0].slice(0)); return true; }
-          })`;
-          await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+          await ctx.audioWorklet.addModule('/__tap.js'); // Same origin, so the app's real CSP stays on.
           const keep = new Audio();
           keep.srcObject = new MediaStream([e.track]);
           keep.muted = true;
@@ -119,8 +126,19 @@ const flags = (mic) => [
 const open = async (browser, gps) => {
   const context = await browser.newContext({ viewport: { width: 412, height: 860 }, permissions: ['microphone', 'geolocation'] });
   await context.addInitScript(instrument, gps);
+  await context.route('**/__tap.js', (r) =>
+    r.fulfill({
+      contentType: 'text/javascript',
+      body: `registerProcessor('tap', class extends AudioWorkletProcessor {
+        process(i) { if (i[0][0]) this.port.postMessage(i[0][0].slice(0)); return true; }
+      })`,
+    }),
+  );
   const page = await context.newPage();
   page.on('pageerror', (e) => console.log('  page error:', e.message));
+  page.on('console', (m) => {
+    if (/Content Security Policy/i.test(m.text())) console.log(`FAIL  blocked by CSP: ${m.text().slice(0, 150)}`);
+  });
   await page.goto(BASE);
   return { context, page };
 };
@@ -132,13 +150,45 @@ try {
   const a = await open(browserA, { lat: 12.9716, lon: 77.5946, kmh: 120 });
   const b = await open(browserB, { lat: 12.98, lon: 77.6, kmh: 0 });
 
+  // Accounts: nothing is reachable without signing in.
+  check((await a.page.locator('button:has-text("Sign in")').count()) === 1, 'the app opens on sign in, not on the ride screen');
+  const email = `asha.${Date.now()}@test.example`;
+  await a.page.click('text=Create an account');
   await a.page.fill('#name', 'Asha');
+  await a.page.fill('#email', email);
+  await a.page.fill('#password', 'first-password');
+  await a.page.click('button:has-text("Create account")');
+  const recovery = (await a.page.locator('.recovery-code').innerText()).trim();
+  check(/^[A-Z2-9]{4}(-[A-Z2-9]{4}){3}$/.test(recovery), 'sign-up shows a recovery code once');
+  await a.page.click('text=I saved it');
+  await a.page.waitForSelector('#code');
+  await a.page.click('text=Sign out');
+  await a.page.waitForSelector('button:has-text("Sign in")');
+  await a.page.fill('#email', email);
+  await a.page.fill('#password', 'wrong-password');
+  await a.page.click('button:has-text("Sign in")');
+  check(await waitFor(async () => (await a.page.locator('text=Wrong email or password').count()) > 0, 'wrong password'), 'a wrong password is refused');
+  await a.page.click('text=Forgot password?');
+  await a.page.fill('#email', email);
+  await a.page.fill('#recovery', recovery.toLowerCase());
+  await a.page.fill('#password', 'second-password');
+  await a.page.click('button:has-text("Reset password")');
+  const nextRecovery = await a.page.locator('.recovery-code').innerText().catch(() => '');
+  check(!!nextRecovery && nextRecovery !== recovery, 'a recovery code resets the password and is replaced');
+  await a.page.click('text=I saved it');
+  await a.page.waitForSelector('#code');
+  await a.page.click('text=Sign out');
+  await a.page.fill('#email', email);
+  await a.page.fill('#password', 'second-password');
+  await a.page.click('button:has-text("Sign in")');
+  check(await a.page.waitForSelector('#code', { timeout: 8000 }).then(() => true, () => false), 'signing in with the new password works');
+
   await a.page.click('text=Plan a new ride');
   await a.page.waitForSelector('.topbar');
   const code = (await a.page.locator('.chip').first().innerText()).replace(/.*·\s*/, '').trim();
   check(/^[A-Z2-9]{6}$/.test(code), 'ride created with a readable code', code);
 
-  await b.page.fill('#name', 'Ben');
+  await signUp(b.page, 'Ben');
   await b.page.fill('#code', code);
   await b.page.click('text=Join ride');
   await b.page.waitForSelector('.topbar');
@@ -218,6 +268,8 @@ try {
 
   // Search, with the live geocoder.
   await a.page.fill('[aria-label="Search for a stop"]', 'Nandi Hills');
+  const gmaps = await a.page.locator('a:has-text("on Google Maps")').getAttribute('href');
+  check(gmaps?.startsWith('https://www.google.com/maps/search/?api=1&query=Nandi'), 'typing offers a real Google Maps search');
   check(await waitFor(async () => (await a.page.locator('.hits .row').count()) > 0, 'search results', 20000), 'searching for a place finds it');
   await a.page.locator('.hits .row').first().click();
   check(await waitFor(async () => (await b.page.locator('.stop-index').count()) === 2, 'second stop syncs'), 'a searched place is added for the whole group');
@@ -236,7 +288,7 @@ try {
   const lateContext = await browserB.newContext({ viewport: { width: 412, height: 860 }, permissions: ['geolocation'] });
   const late = await lateContext.newPage();
   await late.goto(`${BASE}/r/${code}`);
-  await late.fill('#name', 'Dev');
+  await signUp(late, 'Dev');
   await late.click('text=Join ride');
   check(await waitFor(async () => (await late.locator('.stop-index').count()) === 2, 'plan opens for late joiner'), 'a rider who joins later sees the plan open automatically');
   await lateContext.close();
@@ -246,6 +298,24 @@ try {
   await a.page.click('text=Need fuel');
   await waitFor(async () => (await b.page.locator('.alert-toast').count()) > 0, 'alert delivered');
   check((await b.page.locator('.alert-toast').innerText()).includes('Asha needs fuel'), 'alert reaches the other rider');
+
+  // Ride lifecycle: Start is the host's, and it moves the whole group at once.
+  check((await b.page.locator('text=Waiting for Asha to start the ride').count()) === 1, 'a rider sees they are waiting for the host');
+  check((await a.page.locator('button:has-text("Start ride")').count()) === 1, 'the host has the Start ride button');
+  await a.page.click('button:has-text("Start ride")');
+  check(await waitFor(async () => (await a.page.locator('.hud').count()) === 1, 'host hud'), 'starting shows the ride timer');
+  check(await waitFor(async () => (await b.page.locator('.hud').count()) === 1, 'rider hud'), 'the start reaches the whole group at once');
+  check((await a.page.locator('button:has-text("Start ride")').count()) === 0, 'Start ride goes away once riding');
+  check((await a.page.locator('.panel').count()) === 0, 'panels close so the map is clear when the ride starts');
+
+  // Someone arriving mid-ride is asked to join the call.
+  const midContext = await browserB.newContext({ viewport: { width: 412, height: 860 }, permissions: ['geolocation', 'microphone'] });
+  const mid = await midContext.newPage();
+  await mid.goto(`${BASE}/r/${code}`);
+  await signUp(mid, 'Mira');
+  await mid.click('text=Join ride');
+  check(await waitFor(async () => (await mid.locator('text=Ride started').count()) > 0, 'prompt'), 'a rider joining mid-ride is prompted to join the call');
+  await midContext.close();
 
   // Voice through a whole clip
   await b.page.evaluate(() => (window.__recording.length = 0));
@@ -320,7 +390,7 @@ try {
   const bad = await c.newPage();
   await bad.route('**/api/config', (r) => r.fulfill({ json: { mapplsKey: 'not-a-real-key' } }));
   await bad.goto(BASE);
-  await bad.fill('#name', 'Cara');
+  await signUp(bad, 'Cara');
   await bad.fill('#code', code);
   await bad.click('text=Join ride');
   await bad.waitForSelector('.topbar');
@@ -342,12 +412,23 @@ try {
   await portal.locator('.row:has-text("Cara") button:has-text("Remove")').click();
   check(await waitFor(async () => (await bad.locator('text=You were removed').count()) > 0, 'kick reaches rider'), 'owner can remove a rider, who is told why');
 
-  // Stats: a recorded ride appears when the rider leaves.
-  await a.page.click('text=Leave ride');
-  await a.page.waitForSelector('#name');
-  await a.page.click('text=My rides and stats');
-  check(await waitFor(async () => (await a.page.locator('.ride-stats .row').count()) > 0, 'ride log listed'), 'the finished ride appears in My rides');
-  await a.page.locator('.ride-stats .row').first().click();
+  // Ending the ride: everyone stops, and everyone gets their own summary.
+  a.page.on('dialog', (d) => d.accept());
+  await a.page.click('text=End ride for everyone');
+  check(await waitFor(async () => (await a.page.locator('.ride-stats .stat-card').count()) === 6, 'host summary', 20000), 'ending the ride shows the host their summary');
+  check(await waitFor(async () => (await b.page.locator('.ride-stats').count()) === 1, 'rider summary', 20000), 'ending the ride shows the other rider a summary too');
+  check((await toneSeq(a.page)).includes('784 659 523 392'), 'the ride-end cue plays', '');
+  const finishedJoin = await (async () => {
+    const ctx = await browserB.newContext();
+    const p = await ctx.newPage();
+    await p.goto(`${BASE}/r/${code}`);
+    await signUp(p, 'Late');
+    await p.click('text=Join ride');
+    const refused = await waitFor(async () => (await p.locator('text=This ride has finished').count()) > 0, 'finished join refused');
+    await ctx.close();
+    return refused;
+  })();
+  check(finishedJoin, 'nobody new can join a finished ride');
   check(await waitFor(async () => (await a.page.locator('.stat-card').count()) === 6, 'ride detail'), 'ride stats show the six headline figures');
   check((await a.page.locator('.speed-map line').count()) > 3, 'the speed map is drawn');
   check((await a.page.locator('.chart .bar').count()) > 0, 'the speed-over-time chart is drawn');
@@ -358,10 +439,14 @@ try {
   const mapWidth = (await a.page.locator('.speed-map').boundingBox())?.width ?? 0;
   check(mapWidth > 300 && tileWidth > 90, 'stats layout uses the full phone width', `map ${Math.round(mapWidth)}px, tile ${Math.round(tileWidth)}px`);
   await a.page.screenshot({ path: `${outDir}/stats.png`, fullPage: true });
+  await a.page.click('button:has-text("Done")');
+  await a.page.waitForSelector('#code');
+  await a.page.click('text=My rides and stats');
+  check(await waitFor(async () => (await a.page.locator('.ride-stats .row').count()) > 0, 'ride log listed'), 'the finished ride stays in My rides');
 
-  // Ending a ride reaches the riders still on it.
+  // The owner can force-close a ride from the portal.
   await portal.locator('button:has-text("End ride")').first().click();
-  check(await waitFor(async () => (await b.page.locator('text=ended by the owner').count()) > 0, 'end reaches rider'), 'owner can end a ride for everyone');
+  check(await waitFor(async () => (await b.page.locator('text=ended by the owner').count()) > 0, 'end reaches rider'), 'owner can close a ride for everyone');
 
   await browserA.close();
   await browserB.close();

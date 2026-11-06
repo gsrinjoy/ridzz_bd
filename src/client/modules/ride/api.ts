@@ -1,4 +1,4 @@
-import type { Account, AppConfig, FriendsView, JoinResponse, PlaceHit, RouteResult } from '../../../shared/protocol';
+import type { Account, AppConfig, FriendsView, JoinResponse, PlaceHit, Registered, RouteResult } from '../../../shared/protocol';
 import type { LatLng } from '../../../shared/geo';
 import type { ParsedPlace } from '../../../shared/mapsLink';
 import type { RideLog, RideSummary } from '../../../shared/stats';
@@ -8,9 +8,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const a = account.peek();
   const res = await fetch(path, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(a ? { 'x-user': a.userId, 'x-user-token': a.token } : {}), ...init?.headers },
+    headers: { 'content-type': 'application/json', ...(a ? { authorization: `Bearer ${a.token}` } : {}), ...init?.headers },
   });
   const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  // The session expired or was revoked, so the rider has to sign in again.
+  if (res.status === 401 && a) setAccount(null);
   if (!res.ok) throw new Error(data.error ?? 'Could not reach the server');
   return data;
 }
@@ -20,20 +22,14 @@ const send = <T>(method: string, path: string, body?: unknown) =>
 
 export const fetchConfig = () => call<AppConfig>('/api/config');
 
-/** The first ride quietly creates the account. There is nothing to sign up for. */
-export async function ensureAccount(name: string, color: string): Promise<Account> {
-  const existing = account.peek();
-  if (existing) {
-    if (existing.name !== name || existing.color !== color) {
-      await send('PATCH', '/api/accounts/me', { name, color });
-      setAccount({ ...existing, name, color });
-    }
-    return account.peek() as Account;
-  }
-  const created = await send<Account>('POST', '/api/accounts', { name, color });
-  setAccount(created);
-  return created;
-}
+export const register = (name: string, color: string, email: string, password: string) =>
+  send<Registered>('POST', '/api/auth/register', { name, color, email, password });
+export const login = (email: string, password: string) => send<Account>('POST', '/api/auth/login', { email, password });
+export const recoverAccount = (email: string, code: string, password: string) =>
+  send<Registered>('POST', '/api/auth/recover', { email, code, password });
+export const changePassword = (current: string, next: string) => send<Account>('POST', '/api/auth/password', { current, next });
+export const signOutSession = () => send('POST', '/api/auth/logout', {});
+export const updateProfile = (name: string, color: string) => send('PATCH', '/api/accounts/me', { name, color });
 
 export const createRide = () => send<JoinResponse>('POST', '/api/rides', {});
 export const joinRide = (code: string) => send<JoinResponse>('POST', `/api/rides/${code}/join`, {});

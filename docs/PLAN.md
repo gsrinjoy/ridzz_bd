@@ -6,17 +6,20 @@ Group intercom and ride tracking for up to 10 riders. Android riders install a s
 
 | Area | Features |
 |---|---|
+| **Ride lifecycle** | Planning, then Start ride for the whole group, then End ride with a summary for everyone. The server owns the phase |
+| **Accounts and security** | Email and password, hashed with PBKDF2. Revocable sessions, lockout, recovery code, owner reset, security headers, rate limits |
 | **Voice** | Group call, auto-talk, hold-to-talk, open mic, mute, wind and road noise reduction with Light, Balanced and Strong settings, self-healing links |
+| **Nearby (Android)** | Phone-to-phone voice, location and alerts over Google Nearby Connections when the internet drops, relayed across up to 3 hops |
 | **Call deck** | Participants, timer, link quality, mute, speaker and mic selection, speaker test, end call, per-rider volume, mute a rider for yourself only |
 | **Call sounds** | Join, leave, rider joined, rider left, reconnecting, reconnected, call cut, mute. Short and quiet, with rules that keep network blips silent |
-| **Ride planner** | Ride name, meet time, search, Google Maps link import, Android share sheet, long-press on map, ordered stops, reordering, total distance and time, per-leg distance |
+| **Ride planner** | Ride name, meet time, search, Search on Google Maps, Google Maps link import, Android share sheet, long-press on map, ordered stops, reordering, total distance and time, per-leg distance |
 | **Map** | Mappls when a key is set, with automatic fallback to a free map. Rider pins, talking ring, road route, tap a stop or rider for details |
 | **Navigation** | Directions to any stop or rider, or the whole route, through Google Maps in two-wheeler mode. Free and keyless |
 | **Rider tracking** | Live position, speed, distance, offline status, adaptive update rate |
 | **Alerts** | Fuel, stop, regroup, hazard, hold-for-SOS with location. Tone plus spoken message |
 | **Invites and friends** | Link, QR code, WhatsApp, ride code. Friend codes, requests, ride invites |
 | **Ride stats** | Per rider, per day: distance, moving and stopped time, average and top speed, speed map, 5-minute speed log, time in speed bands |
-| **Owner portal** | `/admin`: totals, service status, live rides and riders, end a ride, remove a rider, block or delete users |
+| **Owner portal** | `/admin`: totals, service status, live rides and riders, close a ride, remove a rider, block, delete or reset users, view their ride stats |
 | **Android** | Foreground service, screen-off voice and GPS, Bluetooth and speaker routing, battery exemption prompt, share-to-app |
 
 ## Architecture
@@ -39,6 +42,19 @@ Decisions worth knowing:
 - **A closed gate sends nothing.** RTP stops entirely between words, so an idle radio can sleep.
 - **Batched location.** The server fans out positions every 3 seconds, so a phone's radio wakes once per interval rather than once per rider.
 - **Stats add no radio or GPS use.** They reuse fixes the app already receives, and upload once at the end of a ride.
+- **Nearby is a failover.** Scanning costs battery, so it starts only after the internet has been down for 6 seconds, and stops 30 seconds after it returns.
+
+## Ride lifecycle
+
+| | Planning | Riding | Finished |
+|---|---|---|---|
+| Main action | Host: Start ride | Talk controls | Ride summary |
+| Recording | Off | On for everyone | Saved for everyone |
+| Call | Optional lobby | Joins automatically on Android; one tap on web | Ends with a cue |
+| Map | Plan and route | Follows the group, next stop, timer | Speed map in the summary |
+| GPS | Low power | Full accuracy | Off |
+
+The server owns the phase, so everyone moves together and a rider arriving late lands in the right place. Only the host can start or end, unless the host is offline, so a dead phone cannot strand the group.
 
 ## Free-tier budget
 
@@ -76,7 +92,7 @@ The raw mic scores better with Whisper in every row, and that needs reading care
 | Highway mix | 73% |
 | City traffic with horns | 68% |
 
-**On Android 15 (emulator):** with the screen off, the service stayed foreground with microphone and location types (`0x88`), capability `L-MNFUA`, the mic was not silenced, GPS kept arriving, and the process was not killed. RAM was about 190 to 210 MB in the pocket and 240 MB with the map open, including the WebView.
+**On Android 15 (emulator):** with the screen off, the service stayed foreground with microphone and location types (`0x88`), capability `L-MNFUA`, the mic was not silenced, GPS kept arriving, and the process was not killed. RAM was about 176 to 210 MB in the pocket and up to 240 MB with the map open, including the WebView.
 
 **CPU:** the capture chain takes 155 µs per 10 ms frame, or 1.55% of one core on an Apple Silicon Mac. Expect several times that on a mid-range phone.
 
@@ -88,15 +104,17 @@ The raw mic scores better with Whisper in every row, and that needs reading care
 - **Bluetooth helmets.** Routing is built, but the emulator has no Bluetooth. On the emulator the capture source was `CAMCORDER`, which on some phones may bypass a Bluetooth mic. Needs a real phone and intercom.
 - **Battery.** Not measured. An emulator cannot give meaningful numbers, so this needs a real ride.
 - **Horns.** They are loud and tonal, so a horn can open the mic for about a second.
-- **Cloudflare voice relay.** The relay code follows the docs and has unit tests, but it has never run against the real service, because that needs an account. Until those keys are set, voice uses direct links, which can fail on cellular networks. See the README.
+- **Cloudflare voice relay.** The relay code follows the docs and has unit tests, but it has never run against the real service, because that needs keys only the owner can create. Until they are set, voice uses direct links, which can fail on cellular networks. See the README.
+- **Nearby.** It starts on real Google Play services and its voice path is tested, but the radio link itself needs two real Android phones. Audio and alerts over it are unproven in the field.
+- **Password recovery.** There is no email reset, because free sending services typically need a card. Losing both the password and the recovery code means asking the owner for a reset. Email addresses are not verified.
 - **Mappls.** Mappls publishes no free quota, and its terms allow removing free access after 3 months unused. The adapter follows Mappls' SDK docs and has unit tests, but it has never run with a real key. If it fails, the app switches to the backup map by itself. Ola Maps is the next choice if Mappls proves awkward: 100,000 free map loads a month, published, and no credit balance needed within that.
-- **Accounts live on the device.** There is no email or password, so clearing app data loses the account.
 - **Planning is open.** Anyone on a ride can edit the plan, which suits a group of friends.
 
 ## Next
 
-1. **Road test.** Record real helmet noise at 40, 80 and 120 km/h, retune against it, and measure battery on a real ride.
-2. **Nearby voice on Android.** Google Nearby Connections for phone-to-phone voice with no internet, so that riders in range stay connected in dead zones. Needs two real Android phones to build and test. It cannot reach iPhones: no website can use it, and an iPhone app needs Apple's paid developer account.
-3. **Mappls search** for Indian places, once a real key exists to test with.
-4. **Crash detection**, and a host-only planning mode if the group wants it.
-5. **Stronger wind model.** Retrain RNNoise on real recordings, or evaluate GTCRN, if real-world results call for it.
+1. **Keys.** Mappls, Cloudflare voice relay and TURN, then test each live.
+2. **Road test.** Record real helmet noise at 40, 80 and 120 km/h, retune against it, and measure battery on a real ride.
+3. **Two real Android phones.** Prove the Nearby radio link and Bluetooth helmet routing.
+4. **A real iPhone.** Prove the web app, starting in Safari.
+5. **Mappls search** for Indian places, once a real key exists to test with.
+6. **Crash detection**, if the group wants it.

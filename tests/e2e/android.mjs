@@ -75,6 +75,19 @@ async function attach() {
   };
 }
 
+async function signUpOn(page) {
+  await page.waitFor('#email');
+  await page.clickText('Create an account');
+  await page.waitFor('#name');
+  await page.fill('#name', 'Dev');
+  await page.fill('#email', `dev.${Date.now()}@test.example`);
+  await page.fill('#password', 'test-password-1');
+  await page.clickText('Create account');
+  await page.waitFor('.recovery-code');
+  await page.clickText('I saved it');
+  await page.waitFor('#code');
+}
+
 function memoryMb() {
   // The app process plus the WebView's sandboxed renderer, which holds the page.
   const pids = grep(shell('ps -A -o PID,NAME'), new RegExp(`${PKG}|sandboxed_process`)).map((l) => l.split(/\s+/)[0]);
@@ -94,9 +107,33 @@ function memoryMb() {
 try {
   adb('reverse', `tcp:${PORT}`, `tcp:${PORT}`);
   adb('emu', 'geo', 'fix', '77.5946', '12.9716');
-  // A clean install each run: clearing also revokes permissions, so they are granted again.
+  // First run, with nothing granted: Android itself must ask.
   shell(`pm clear ${PKG}`);
-  for (const p of ['RECORD_AUDIO', 'ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'POST_NOTIFICATIONS', 'BLUETOOTH_CONNECT']) {
+  shell('logcat -c');
+  shell(`am start -n ${PKG}/.MainActivity`);
+  await wait(8000);
+  {
+    const pid0 = shell(`pidof ${PKG}`);
+    adb('forward', '--remove-all');
+    adb('forward', `tcp:${CDP}`, `localabstract:webview_devtools_remote_${pid0}`);
+    const fresh = await attach();
+    await signUpOn(fresh);
+    await fresh.clickText('Plan a new ride');
+    await fresh.waitFor('.topbar');
+    await wait(1500);
+    let focus = shell('dumpsys window | grep mCurrentFocus');
+    if (!/permissioncontroller/.test(focus)) {
+      await fresh.clickText('Join the call');
+      await wait(3000);
+      focus = shell('dumpsys window | grep mCurrentFocus');
+    }
+    check(/permissioncontroller/.test(focus), 'a fresh install asks for permission', focus.match(/[a-z.]*permissioncontroller[^ }]*/)?.[0] ?? focus.slice(0, 80));
+    fresh.close();
+  }
+
+  // Then a clean install with permissions in place, for everything else.
+  shell(`pm clear ${PKG}`);
+  for (const p of ['RECORD_AUDIO', 'ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION', 'POST_NOTIFICATIONS', 'BLUETOOTH_CONNECT', 'BLUETOOTH_ADVERTISE', 'BLUETOOTH_SCAN', 'NEARBY_WIFI_DEVICES']) {
     shell(`pm grant ${PKG} android.permission.${p}`);
   }
   shell('logcat -c');
@@ -114,11 +151,31 @@ try {
   check(platform === 'android', 'the native bridge is present', platform);
   check(await page.evaluate(() => !!window.Capacitor?.isPluginAvailable?.('RideShell')), 'the RideShell plugin is registered');
 
-  await page.fill('#name', 'Dev');
+  await signUpOn(page);
   await page.clickText('Plan a new ride');
   await page.waitFor('.topbar');
-  await page.clickText('Join the call');
-  await wait(6000);
+
+  // The Android app needs no tap: starting the ride joins the call by itself.
+  await page.clickText('Start ride');
+  await wait(7000);
+  check(await page.evaluate(() => !document.querySelector('.sheet')), 'Android joins the call with no prompt when the ride starts');
+  check(await page.evaluate(() => !!document.querySelector('.hud')), 'the ride timer is running');
+
+  // Nearby, against real Google Play services on the device.
+  const nearbyInfo = await page.evaluate(async () => {
+    const webcodecs = 'AudioEncoder' in window && (await AudioEncoder.isConfigSupported({ codec: 'opus', sampleRate: 48000, numberOfChannels: 1 })).supported;
+    const plugin = window.Capacitor.Plugins.NearbyLink;
+    try {
+      await plugin.start({ code: 'TEST22', name: 'Dev' });
+      await plugin.stop();
+      return { webcodecs, started: true };
+    } catch (e) {
+      return { webcodecs, started: false, error: String(e.message ?? e) };
+    }
+  });
+  check(await page.evaluate(() => !!window.Capacitor?.isPluginAvailable?.('NearbyLink')), 'the NearbyLink plugin is registered');
+  check(nearbyInfo.webcodecs === true, 'the Android WebView can encode Opus for local voice');
+  check(nearbyInfo.started, 'Nearby starts on real Google Play services', nearbyInfo.error ?? 'advertising and discovery started');
 
   const services = shell(`dumpsys activity services ${PKG}`);
   check(/RideService/.test(services), 'RideService is running');

@@ -41,6 +41,16 @@ export class LocationTracker {
     );
   }
 
+  /** Precision is fixed when a watch starts, so a change of mode has to restart it. */
+  setSaver(saver: boolean): void {
+    if (saver === this.saver) return;
+    this.saver = saver;
+    if (this.watch !== undefined) {
+      this.stop();
+      this.start();
+    }
+  }
+
   stop(): void {
     if (this.watch !== undefined) navigator.geolocation.clearWatch(this.watch);
     this.watch = undefined;

@@ -117,6 +117,7 @@ export function createMapplsEngine(sdk: MapplsSdk, containerId: string, start: L
   map.addListener('touchend', pressEnd);
   map.addListener('touchmove', pressEnd);
   map.addListener('touchcancel', pressEnd);
+  map.addListener('dragstart', () => events.onUserPan());
   map.addListener('contextmenu', (e) => {
     if (e?.lngLat) events.onLongPress({ la: e.lngLat.lat, lo: e.lngLat.lng });
   });

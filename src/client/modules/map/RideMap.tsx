@@ -1,12 +1,16 @@
 import { effect } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 import type { LatLng } from '../../../shared/geo';
-import { droppedPin, mapProvider, mapReady, myPosition, riders, route, selectedRiderId, selectedStopId, session, stops } from '../../app/store';
+import { droppedPin, mapProvider, mapReady, myPosition, nextStop, phase, riders, route, selectedRiderId, selectedStopId, session, stops } from '../../app/store';
 import { fetchConfig } from '../ride/api';
 import type { MapEngine, MapEvents, RiderPin } from './engine';
 import { createMapplsEngine, loadMapplsSdk } from './mapplsEngine';
 
 const CONTAINER_ID = 'ride-map';
+/** How often the map reframes the group while riding. Slow on purpose: each move costs GPU power. */
+const FOLLOW_EVERY_MS = 15_000;
+/** How long a rider's own panning is respected before the map follows again. */
+const FOLLOW_PAUSE_MS = 30_000;
 
 export interface MapHandle {
   fitAll(): void;
@@ -38,6 +42,12 @@ function riderPins(): RiderPin[] {
 
 const allPoints = (): LatLng[] => [...riderPins().map((r) => r.pos), ...stops.value];
 
+/** While riding, what matters is the group and where it is heading next. */
+function followPoints(): LatLng[] {
+  const next = nextStop.value;
+  return [...riderPins().filter((r) => r.online).map((r) => r.pos), ...(next ? [next] : [])];
+}
+
 export default function RideMap({ handle }: { handle: { current: MapHandle | null } }) {
   const container = useRef<HTMLDivElement>(null);
 
@@ -46,6 +56,8 @@ export default function RideMap({ handle }: { handle: { current: MapHandle | nul
     let cancelled = false;
     let disposers: (() => void)[] = [];
     let fitted = false;
+    let lastFollow = 0;
+    let pausedUntil = 0;
     mapReady.value = false;
 
     void openEngine(container.current as HTMLDivElement, {
@@ -53,12 +65,16 @@ export default function RideMap({ handle }: { handle: { current: MapHandle | nul
       onStopTap: (id) => (selectedStopId.value = id),
       onLongPress: (at) => (droppedPin.value = at),
       onReady: () => (mapReady.value = true),
+      onUserPan: () => (pausedUntil = Date.now() + FOLLOW_PAUSE_MS),
     }).then((e) => {
       if (cancelled) return e.destroy();
       engine = e;
       mapProvider.value = e.provider;
       handle.current = {
-        fitAll: () => e.fit(allPoints()),
+        fitAll: () => {
+          pausedUntil = 0;
+          e.fit(phase.peek() === 'riding' ? followPoints() : allPoints());
+        },
         centerOnMe: () => {
           const p = myPosition.value;
           if (p) e.center(p, 13);
@@ -74,6 +90,11 @@ export default function RideMap({ handle }: { handle: { current: MapHandle | nul
           if (!fitted && allPoints().length > 1) {
             fitted = true;
             e.fit(allPoints());
+          }
+          const now = Date.now();
+          if (phase.value === 'riding' && now > pausedUntil && now - lastFollow > FOLLOW_EVERY_MS) {
+            lastFollow = now;
+            e.fit(followPoints());
           }
         }),
         effect(() => {

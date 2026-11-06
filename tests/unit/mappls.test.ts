@@ -56,7 +56,7 @@ function fakeSdk() {
 const pin = (o: Partial<RiderPin> = {}): RiderPin => ({ id: 'a', name: 'Asha', color: '#FF6A1A', pos: { la: 12, lo: 77 }, isMe: false, online: true, talking: false, ...o });
 
 describe('Mappls engine', () => {
-  const events = { onRiderTap: vi.fn(), onStopTap: vi.fn(), onLongPress: vi.fn(), onReady: vi.fn() };
+  const events = { onRiderTap: vi.fn(), onStopTap: vi.fn(), onLongPress: vi.fn(), onReady: vi.fn(), onUserPan: vi.fn() };
   let f: ReturnType<typeof fakeSdk>;
 
   const open = async () => {

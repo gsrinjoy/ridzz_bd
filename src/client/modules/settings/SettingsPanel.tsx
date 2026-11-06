@@ -1,7 +1,58 @@
-import { useEffect } from 'preact/hooks';
-import { leaveRide, setMeters } from '../../app/session';
-import { mapProvider, meter, prefs, rideMode, setPrefs, voice } from '../../app/store';
+import { useEffect, useState } from 'preact/hooks';
+import { endRide, leaveRide, setMeters, signOut } from '../../app/session';
+import { account, canControl, isAndroidApp, mapProvider, meter, phase, prefs, rideMode, setPrefs, voice } from '../../app/store';
 import { Moon } from '../../ui/icons';
+import { changePassword, updateProfile } from '../ride/api';
+import { setAccount } from '../../app/store';
+
+function AccountSection() {
+  const a = account.value;
+  const [name, setName] = useState(a?.name ?? '');
+  const [current, setCurrent] = useState('');
+  const [next, setNext] = useState('');
+  const [message, setMessage] = useState('');
+  if (!a) return null;
+
+  async function saveName() {
+    try {
+      await updateProfile(name.trim(), (a as NonNullable<typeof a>).color);
+      setAccount({ ...(a as NonNullable<typeof a>), name: name.trim() });
+      setMessage('Name saved. It applies from your next ride.');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Could not save');
+    }
+  }
+
+  async function savePassword() {
+    try {
+      setAccount(await changePassword(current, next));
+      setCurrent('');
+      setNext('');
+      setMessage('Password changed. Other devices are signed out.');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Could not change it');
+    }
+  }
+
+  return (
+    <details class="account">
+      <summary>Account</summary>
+      <div class="setting">
+        <label class="label" for="profile-name">Your name</label>
+        <input id="profile-name" class="field" value={name} maxLength={24} onInput={(e) => setName(e.currentTarget.value)} />
+        <button class="btn block" disabled={!name.trim() || name === a.name} onClick={() => void saveName()}>Save name</button>
+      </div>
+      <div class="setting">
+        <span class="label">Change password</span>
+        <input class="field" type="password" autoComplete="current-password" placeholder="Current password" aria-label="Current password" value={current} onInput={(e) => setCurrent(e.currentTarget.value)} />
+        <input class="field" type="password" autoComplete="new-password" placeholder="New password, 8 or more characters" aria-label="New password" value={next} onInput={(e) => setNext(e.currentTarget.value)} />
+        <button class="btn block" disabled={!current || next.length < 8} onClick={() => void savePassword()}>Change password</button>
+      </div>
+      {message && <span class="note" role="status">{message}</span>}
+      <button class="btn block" onClick={() => void signOut()}>Sign out</button>
+    </details>
+  );
+}
 
 export function SettingsPanel() {
   useEffect(() => {
@@ -55,11 +106,22 @@ export function SettingsPanel() {
 
       {mapProvider.value && <span class="note">Map: {mapProvider.value === 'mappls' ? 'Mappls' : 'backup map (Mappls key not set or unavailable)'}</span>}
 
+      {isAndroidApp() && (
+        <label class="setting-row">
+          <span>Nearby link when the internet drops</span>
+          <input type="checkbox" checked={p.nearbyMode === 'auto'} onChange={(e) => setPrefs({ nearbyMode: e.currentTarget.checked ? 'auto' : 'off' })} />
+        </label>
+      )}
       <label class="setting-row">
         <span>Call sounds (join, leave, reconnect)</span>
         <input type="checkbox" checked={p.callSounds} onChange={(e) => setPrefs({ callSounds: e.currentTarget.checked })} />
       </label>
 
+      <AccountSection />
+
+      {phase.value === 'riding' && canControl.value && (
+        <button class="btn danger block" onClick={() => { if (confirm('End the ride for everyone and save the stats?')) endRide(); }}>End ride for everyone</button>
+      )}
       <button class="btn danger block" onClick={() => leaveRide()}>Leave ride</button>
     </>
   );

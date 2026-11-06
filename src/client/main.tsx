@@ -1,11 +1,13 @@
 import { render } from 'preact';
+import { AuthScreen } from './app/AuthScreen';
 import { Home } from './app/Home';
 import { RideScreen } from './app/RideScreen';
 import { connect } from './app/session';
-import { pendingShare, session } from './app/store';
+import { account, pendingShare, session } from './app/store';
 import './ui/styles.css';
 
 function App({ invite }: { invite: string | null }) {
+  if (!account.value) return <AuthScreen />;
   return session.value ? <RideScreen /> : <Home invite={invite} />;
 }
 
@@ -29,7 +31,7 @@ function start() {
     history.replaceState(null, '', '/');
   }
 
-  if (session.value) connect(session.value);
+  if (session.value && account.value) connect(session.value);
   render(<App invite={invite} />, root);
 
   if ('serviceWorker' in navigator && import.meta.env.PROD) {

@@ -2,8 +2,9 @@
 // cannot exercise a real mic, lock screen, or Bluetooth. It does prove our code
 // runs on WebKit, including the voice pipeline fed from a synthetic source.
 import { spawn } from 'node:child_process';
-import { readdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdtempSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { devices, webkit } from 'playwright-core';
 
 const PORT = 8790;
@@ -14,8 +15,18 @@ const check = (ok, label, detail = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  (${detail})` : ''}`);
   if (!ok) failures++;
 };
+const signUp = async (page, name) => {
+  await page.click('text=Create an account');
+  await page.fill('#name', name);
+  await page.fill('#email', `${name.toLowerCase()}.${Math.random().toString(36).slice(2, 8)}@test.example`);
+  await page.fill('#password', 'test-password-1');
+  await page.click('button:has-text("Create account")');
+  await page.click('text=I saved it');
+  await page.waitForSelector('#code');
+};
+
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const server = spawn('pnpm', ['exec', 'wrangler', 'dev', '--port', String(PORT)], { stdio: 'ignore' });
+const server = spawn('pnpm', ['exec', 'wrangler', 'dev', '--port', String(PORT), '--persist-to', mkdtempSync(join(tmpdir(), 'slipstream-'))], { stdio: 'ignore' });
 for (let i = 0; i < 80 && !(await fetch(BASE).then((r) => r.ok).catch(() => false)); i++) await wait(500);
 
 const assets = readdirSync('dist/assets');
@@ -31,7 +42,7 @@ try {
   await page.goto(BASE);
   check(true, 'loads on WebKit with an iPhone profile', await page.evaluate(() => navigator.userAgent.match(/iPhone OS [\d_]+/)?.[0] ?? ''));
 
-  await page.fill('#name', 'Ira');
+  await signUp(page, 'Ira');
   await page.click('text=Plan a new ride');
   await page.waitForSelector('.topbar');
   check(true, 'creates a ride');
@@ -90,7 +101,7 @@ try {
   check((await page.locator('.ridemode').count()) === 1, 'ride mode opens');
   await page.click('.ridemode-foot .btn');
   await page.click('text=Leave ride');
-  await page.waitForSelector('#name');
+  await page.waitForSelector('#code');
   await page.click('text=My rides and stats');
   check((await page.locator('.ride-stats').count()) === 1, 'stats screen renders');
   check(errors.length === 0, 'no uncaught script errors', errors.slice(0, 2).join(' | ').slice(0, 140));

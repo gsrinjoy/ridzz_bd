@@ -154,7 +154,7 @@ function SpeedLog({ log }: { log: RideLog }) {
   );
 }
 
-function Detail({ id, onBack }: { id: string; onBack: () => void }) {
+export function Detail({ id, onBack, backLabel = 'All rides' }: { id: string; onBack: () => void; backLabel?: string }) {
   const [log, setLog] = useState<RideLog | null>(null);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -162,7 +162,7 @@ function Detail({ id, onBack }: { id: string; onBack: () => void }) {
   }, [id]);
   return (
     <>
-      <button class="btn" onClick={onBack}>All rides</button>
+      <button class="btn" onClick={onBack}>{backLabel}</button>
       {error && <p class="error" role="alert">{error}</p>}
       {log && (
         <>

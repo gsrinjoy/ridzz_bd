@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { bearingDeg, distanceM, formatDistance, isValidLatLng } from '../../src/shared/geo';
-import { directionsUrl, extractLink, isShortMapsLink, parseMapsLink, routeUrl } from '../../src/shared/mapsLink';
+import { directionsUrl, extractLink, googleSearchUrl, isShortMapsLink, parseMapsLink, routeUrl } from '../../src/shared/mapsLink';
 
 describe('parseMapsLink', () => {
   it('prefers the place pin over the camera position', () => {
@@ -44,6 +44,10 @@ describe('directions', () => {
     const url = routeUrl(stops) as string;
     expect(url).toContain('destination=6,6');
     expect(url.match(/waypoints=([^&]+)/)?.[1]?.split('%7C')).toHaveLength(3);
+  });
+  it('opens a Google Maps search, biased to where the rider is', () => {
+    expect(googleSearchUrl('Indian Oil')).toBe('https://www.google.com/maps/search/?api=1&query=Indian%20Oil');
+    expect(googleSearchUrl('Indian Oil', { la: 12.97, lo: 77.59 })).toContain('near%2012.970%2C77.590');
   });
   it('has no route without stops', () => {
     expect(routeUrl([])).toBeUndefined();

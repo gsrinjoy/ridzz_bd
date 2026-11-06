@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { directionsUrl } from '../../shared/mapsLink';
 import type { AdminOverview, AdminRide, AdminUser } from '../../shared/protocol';
+import { avgMovingKmh, type RideSummary } from '../../shared/stats';
 import { ago, initial } from '../app/format';
 import { Logo } from '../ui/icons';
 
@@ -70,7 +71,7 @@ function RideCard({ ride, act }: { ride: AdminRide; act: (path: string, body?: u
       <header class="admin-card-head">
         <div>
           <b>{ride.name}</b>
-          <div class="note num">{ride.code} · {online}/{ride.riders.length} online · {ride.stops} stops · active {ago(ride.lastActive)}</div>
+          <div class="note num">{ride.code} · {ride.phase} · {online}/{ride.riders.length} online · {ride.stops} stops · active {ago(ride.lastActive)}</div>
         </div>
         <button class="btn danger" onClick={() => { if (confirm(`End "${ride.name}" for everyone and delete its data?`)) act(`rides/${ride.code}/end`); }}>End ride</button>
       </header>
@@ -89,16 +90,35 @@ function RideCard({ ride, act }: { ride: AdminRide; act: (path: string, body?: u
   );
 }
 
-function UserRow({ user, act, remove }: { user: AdminUser; act: (path: string, body?: unknown) => void; remove: (id: string) => void }) {
+function UserRow({ user, token, act, remove }: { user: AdminUser; token: string; act: (path: string, body?: unknown) => void; remove: (id: string) => void }) {
+  const [logs, setLogs] = useState<RideSummary[] | null>(null);
+  const [temporary, setTemporary] = useState('');
+
+  async function reset() {
+    if (!confirm(`Reset ${user.name}'s password? They will be signed out everywhere.`)) return;
+    const { temporary: value } = await api<{ temporary: string }>(token, `users/${user.id}/reset-password`, { method: 'POST', body: '{}' });
+    setTemporary(value);
+  }
+
   return (
-    <div class="row">
-      <span class={`avatar ${user.blocked ? 'off' : ''}`} style={{ background: user.color }}>{initial(user.name)}</span>
-      <span class="row-main">
-        <div class="row-title">{user.name}{user.blocked ? ' (blocked)' : ''}</div>
-        <div class="row-sub num">{user.friendCode} · {user.friends} friends · {user.ridesLogged} rides logged · seen {ago(user.lastSeen)}</div>
-      </span>
-      <button class="btn" onClick={() => act(`users/${user.id}/block`, { blocked: !user.blocked })}>{user.blocked ? 'Unblock' : 'Block'}</button>
-      <button class="btn danger" onClick={() => { if (confirm(`Delete ${user.name} permanently?`)) remove(user.id); }}>Delete</button>
+    <div class="admin-user">
+      <div class="row">
+        <span class={`avatar ${user.blocked ? 'off' : ''}`} style={{ background: user.color }}>{initial(user.name)}</span>
+        <span class="row-main">
+          <div class="row-title">{user.name}{user.blocked ? ' (blocked)' : ''}</div>
+          <div class="row-sub num">{user.email} · {user.friendCode} · {user.friends} friends · {user.ridesLogged} rides · seen {ago(user.lastSeen)}</div>
+        </span>
+      </div>
+      <div class="admin-actions">
+        <button class="btn" onClick={() => void api<RideSummary[]>(token, `users/${user.id}/stats`).then(setLogs)}>Rides</button>
+        <button class="btn" onClick={() => void reset()}>Reset password</button>
+        <button class="btn" onClick={() => act(`users/${user.id}/block`, { blocked: !user.blocked })}>{user.blocked ? 'Unblock' : 'Block'}</button>
+        <button class="btn danger" onClick={() => { if (confirm(`Delete ${user.name} permanently?`)) remove(user.id); }}>Delete</button>
+      </div>
+      {temporary && <p class="note">Temporary password, shown once: <b class="num">{temporary}</b></p>}
+      {logs && (logs.length ? logs.map((l) => (
+        <div key={l.id} class="note num">{l.date} · {l.rideName} · {(l.distanceM / 1000).toFixed(1)} km · {Math.round(avgMovingKmh(l))} km/h avg · {Math.round(l.topKmh)} km/h top</div>
+      )) : <p class="note">No rides logged.</p>)}
     </div>
   );
 }
@@ -172,7 +192,7 @@ export function AdminApp() {
       </div>
 
       {view === 'rides' && (rides.length ? rides.map((r) => <RideCard key={r.code} ride={r} act={act} />) : <p class="note">No rides right now.</p>)}
-      {view === 'users' && <section class="admin-card">{users.map((u) => <UserRow key={u.id} user={u} act={act} remove={remove} />)}</section>}
+      {view === 'users' && <section class="admin-card">{users.map((u) => <UserRow key={u.id} user={u} token={token} act={act} remove={remove} />)}</section>}
     </main>
   );
 }

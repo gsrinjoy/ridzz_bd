@@ -1,5 +1,6 @@
 import type { AdminOverview, AdminRide } from '../../../shared/protocol';
 import { fail, json, type Env } from '../../env';
+import { clientIp } from '../auth/routes';
 import { directory } from '../directory/Directory';
 import { isRideCode, safeEqual } from '../rides/auth';
 import { room } from '../rides/routes';
@@ -25,11 +26,21 @@ async function allRides(env: Env): Promise<AdminRide[]> {
   );
 }
 
+/** A live ride socket does not pass through login again, so a block has to reach it directly. */
+async function removeFromRides(env: Env, userId: string): Promise<void> {
+  const rides = await directory(env).listRides();
+  await Promise.all(rides.map((r) => room(env, r.code).kick(userId)));
+}
+
 export async function adminRoutes(request: Request, env: Env, path: string[]): Promise<Response | undefined> {
   const [, resource, area, id, action] = path;
   if (resource !== 'admin') return undefined;
-  if (!isOwner(request, env)) return fail(401, 'Wrong owner password');
   const dir = directory(env);
+  if (!isOwner(request, env)) {
+    // Failures alone are counted, so the portal's own polling never locks the owner out.
+    if (!(await dir.allow(`admin:${clientIp(request)}`, 10, 15 * 60_000))) return fail(429, 'Too many attempts. Wait 15 minutes.');
+    return fail(401, 'Wrong owner password');
+  }
 
   if (request.method === 'GET' && area === 'overview') {
     const [rides, users, { friendships }] = await Promise.all([allRides(env), dir.listUsers(), dir.counts()]);
@@ -65,10 +76,17 @@ export async function adminRoutes(request: Request, env: Env, path: string[]): P
     if (request.method === 'POST' && action === 'block') {
       const { blocked } = await request.json<{ blocked?: boolean }>();
       await dir.setBlocked(id, blocked === true);
+      if (blocked) await removeFromRides(env, id);
       return json({ ok: true });
     }
+    if (request.method === 'POST' && action === 'reset-password') {
+      const temporary = await dir.ownerResetPassword(id);
+      return temporary ? json({ temporary }) : fail(404, 'No such user');
+    }
+    if (request.method === 'GET' && action === 'stats') return json(await dir.listLogs(id));
     if (request.method === 'DELETE' && !action) {
       await dir.deleteUser(id);
+      await removeFromRides(env, id);
       return json({ ok: true });
     }
   }

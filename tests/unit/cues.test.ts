@@ -17,6 +17,11 @@ describe('cue sounds', () => {
     for (const c of ['call-join', 'rider-join', 'reconnected'] as Cue[]) expect(rising(c), c).toBe(true);
     for (const c of ['call-leave', 'rider-leave', 'call-cut'] as Cue[]) expect(rising(c), c).toBe(false);
   });
+  it('marks the start and end of a ride with a longer phrase, up and then down', () => {
+    expect(CUES['ride-start'].notes).toHaveLength(4);
+    expect(rising('ride-start')).toBe(true);
+    expect(rising('ride-end')).toBe(false);
+  });
   it('gives each cue its own sound', () => {
     const shapes = Object.values(CUES).map((c) => JSON.stringify(c.notes));
     expect(new Set(shapes).size).toBe(shapes.length);

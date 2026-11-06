@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_RIDERS, type AdminRider, type AlertKind, type ClientMessage, type LocTuple, type Position, type RideInfo, type Rider, type ServerMessage, type Stop, type StopKind, type VoicePublication } from '../../../shared/protocol';
+import { MAX_RIDERS, type AdminRider, type AlertKind, type ClientMessage, type LocTuple, type Position, type RideInfo, type RidePhase, type Rider, type ServerMessage, type Stop, type StopKind, type VoicePublication } from '../../../shared/protocol';
 import { isValidLatLng } from '../../../shared/geo';
 import type { Env } from '../../env';
 import { directory } from '../directory/Directory';
@@ -9,6 +9,9 @@ const LOC_BATCH_MS = 3000;
 const POSITION_PERSIST_MS = 60_000;
 /** Ride data is deleted this long after the last activity. */
 const RETENTION_MS = 48 * 3600_000;
+
+/** Far above any real message, including call setup, and low enough to stop abuse. */
+const MAX_MESSAGE_CHARS = 32_000;
 
 const STOP_KINDS: StopKind[] = ['start', 'fuel', 'food', 'rest', 'view', 'regroup', 'finish'];
 const ALERT_KINDS: AlertKind[] = ['fuel', 'stop', 'regroup', 'hazard', 'sos'];
@@ -45,8 +48,24 @@ export class RideRoom extends DurableObject<Env> {
     const get = (k: string) => meta.find((m) => m.key === k)?.value;
     const code = get('code');
     const name = get('name');
-    const startsAt = Number(get('starts_at'));
-    if (code && name) this.info = { code, name, ...(startsAt ? { startsAt } : {}) };
+    const stamp = (key: string) => {
+      const value = Number(get(key));
+      return value ? value : undefined;
+    };
+    if (code && name) {
+      const startsAt = stamp('starts_at');
+      const startedAt = stamp('started_at');
+      const endedAt = stamp('ended_at');
+      this.info = {
+        code,
+        name,
+        phase: (get('phase') as RidePhase | undefined) ?? 'planning',
+        host: get('host') ?? '',
+        ...(startsAt ? { startsAt } : {}),
+        ...(startedAt ? { startedAt } : {}),
+        ...(endedAt ? { endedAt } : {}),
+      };
+    }
 
     const online = new Set(this.ctx.getWebSockets().map((ws) => (ws.deserializeAttachment() as SocketTag).riderId));
     for (const r of this.sql.exec<{ id: string; name: string; color: string; last_seen: number; pos: string | null; voice: string | null }>('SELECT * FROM riders')) {
@@ -63,14 +82,16 @@ export class RideRoom extends DurableObject<Env> {
     }
   }
 
-  async create(code: string, name: string): Promise<void> {
-    this.sql.exec('INSERT OR REPLACE INTO meta VALUES (?, ?), (?, ?)', 'code', code, 'name', name);
-    this.info = { code, name };
+  async create(code: string, name: string, host: string): Promise<void> {
+    this.sql.exec('INSERT OR REPLACE INTO meta VALUES (?, ?), (?, ?), (?, ?), (?, ?)', 'code', code, 'name', name, 'host', host, 'phase', 'planning');
+    this.info = { code, name, host, phase: 'planning' };
     await this.touch();
   }
 
-  async join(id: string, name: string, color: string): Promise<'ok' | 'missing' | 'full' | 'kicked'> {
+  async join(id: string, name: string, color: string): Promise<'ok' | 'missing' | 'full' | 'kicked' | 'finished'> {
     if (!this.info) return 'missing';
+    // A rider already on the ride may come back to see its summary; nobody new joins a finished ride.
+    if (this.info.phase === 'finished' && !this.riders.has(id)) return 'finished';
     if (this.sql.exec('SELECT 1 FROM kicked WHERE id = ?', id).toArray().length) return 'kicked';
     if (this.riders.size >= MAX_RIDERS && !this.riders.has(id)) return 'full';
     // A rider coming back keeps their last position until a fresh fix arrives.
@@ -99,7 +120,7 @@ export class RideRoom extends DurableObject<Env> {
   }
 
   /** The owner's view of this ride. */
-  snapshot(): { riders: AdminRider[]; stops: number } {
+  snapshot(): { phase: RidePhase; riders: AdminRider[]; stops: number } {
     const riders = [...this.riders.values()].map((r) => ({
       id: r.id,
       name: r.name,
@@ -109,7 +130,7 @@ export class RideRoom extends DurableObject<Env> {
       inCall: r.online && !!r.voice,
       ...(r.pos ? { pos: r.pos } : {}),
     }));
-    return { riders, stops: this.sql.exec('SELECT 1 FROM stops').toArray().length };
+    return { phase: this.info?.phase ?? 'planning', riders, stops: this.sql.exec('SELECT 1 FROM stops').toArray().length };
   }
 
   async end(): Promise<void> {
@@ -154,7 +175,7 @@ export class RideRoom extends DurableObject<Env> {
   }
 
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
-    if (typeof raw !== 'string') return;
+    if (typeof raw !== 'string' || raw.length > MAX_MESSAGE_CHARS) return;
     const tag = ws.deserializeAttachment() as SocketTag;
     const rider = this.riders.get(tag.riderId);
     if (!rider) return;
@@ -188,16 +209,35 @@ export class RideRoom extends DurableObject<Env> {
         return this.broadcast({ t: 'alert', id: rider.id, kind: msg.kind, at: Date.now(), ...(rider.pos ? { pos: rider.pos } : {}) });
       case 'ride.update':
         return this.updateRide(msg);
+      case 'ride.start':
+        return this.setPhase(rider, 'planning', 'riding', 'started_at', 'startedAt');
+      case 'ride.finish':
+        return this.setPhase(rider, 'riding', 'finished', 'ended_at', 'endedAt');
       case 'stop.add':
         return this.addStop(rider, msg.stop);
       case 'stop.remove':
         this.sql.exec('DELETE FROM stops WHERE id = ?', msg.id);
         return this.broadcastStops();
       case 'stop.order':
-        if (!Array.isArray(msg.ids)) return;
+        if (!Array.isArray(msg.ids) || msg.ids.length > 100) return;
         msg.ids.forEach((id, ord) => this.sql.exec('UPDATE stops SET ord = ? WHERE id = ?', ord, id));
         return this.broadcastStops();
     }
+  }
+
+  /** The host decides, but a dead phone must not strand the group, so anyone may if the host is away. */
+  private canControl(rider: Rider): boolean {
+    const host = this.info ? this.riders.get(this.info.host) : undefined;
+    return rider.id === this.info?.host || !host?.online;
+  }
+
+  private setPhase(rider: Rider, from: RidePhase, to: RidePhase, key: string, field: 'startedAt' | 'endedAt'): void {
+    if (this.info?.phase !== from || !this.canControl(rider)) return;
+    const now = Date.now();
+    this.info.phase = to;
+    this.info[field] = now;
+    this.sql.exec('INSERT OR REPLACE INTO meta VALUES (?, ?), (?, ?)', 'phase', to, key, String(now));
+    this.broadcast({ t: 'ride', ride: this.info });
   }
 
   private updateRide(msg: { name?: string; startsAt?: number | null }): void {

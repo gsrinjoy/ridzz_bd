@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { distanceM, formatDistance, type LatLng } from '../../../shared/geo';
-import { directionsUrl, extractLink, isShortMapsLink, parseMapsLink, routeUrl } from '../../../shared/mapsLink';
+import { directionsUrl, extractLink, googleSearchUrl, isShortMapsLink, parseMapsLink, routeUrl } from '../../../shared/mapsLink';
 import type { PlaceHit, Stop, StopKind } from '../../../shared/protocol';
 import { send } from '../../app/session';
-import { droppedPin, isIos, myPosition, pendingShare, ride, route, selectedStopId, stops } from '../../app/store';
-import { ArrowDown, ArrowUp, Navigate, Trash } from '../../ui/icons';
+import { droppedPin, isAndroidApp, isIos, myPosition, pendingShare, reachedStops, ride, route, selectedStopId, stops } from '../../app/store';
+import { ArrowDown, ArrowUp, Check, Navigate, Trash } from '../../ui/icons';
 import { resolveLink, searchPlaces } from '../ride/api';
 
 const KINDS: { kind: StopKind; label: string }[] = [
@@ -117,7 +117,7 @@ function StopItem({ stop, index, total }: { stop: Stop; index: number; total: nu
   return (
     <div ref={ref} class={`stop ${open ? 'open' : ''}`}>
       <button class="stop-row" aria-expanded={open} onClick={() => (selectedStopId.value = open ? null : stop.id)}>
-        <span class="stop-index num">{index + 1}</span>
+        <span class={`stop-index num ${reachedStops.value.includes(stop.id) ? 'reached' : ''}`}>{reachedStops.value.includes(stop.id) ? <Check /> : index + 1}</span>
         <span class="row-main">
           <div class="row-title">{stop.name}</div>
           <div class="row-sub">{kindLabel(stop.kind)}{here ? ` · ${formatDistance(distanceM(here, stop))} from you` : ''}</div>
@@ -191,7 +191,7 @@ export function PlanPanel() {
           setMessage(found.length ? '' : 'No places found. Try another name, or long-press the map.');
         })
         .catch(() => setMessage('Search is unavailable. Long-press the map instead.'));
-    }, 350);
+    }, 500);
     return () => clearTimeout(timer);
   }, [query]);
 
@@ -236,6 +236,15 @@ export function PlanPanel() {
         />
       )}
       {message && <span class="note" role="status">{message}</span>}
+
+      {query.trim().length >= 2 && !looksLikeLink(query) && !pin && (
+        <a class="btn block" href={googleSearchUrl(query.trim(), here)} target="_blank" rel="noopener">
+          <Navigate /> Search “{query.trim().slice(0, 24)}” on Google Maps
+        </a>
+      )}
+      {query.trim().length >= 2 && !looksLikeLink(query) && !pin && (
+        <span class="note">Found it there? {isAndroidApp() ? 'Tap Share, then choose Slipstream.' : 'Tap Share, Copy link, and paste it in the box above.'}</span>
+      )}
 
       {hits.length > 0 && (
         <div class="hits">

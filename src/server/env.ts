@@ -15,12 +15,14 @@ export interface Env {
   TURN_KEY_TOKEN?: string;
   /** Mappls static key. Public by nature, so lock it to your domain in the Mappls console. */
   MAPPLS_KEY?: string;
+  /** Optional in-app Google search. Google requires a billing account for this. */
+  GOOGLE_PLACES_KEY?: string;
 }
 
 export const json = (data: unknown, status = 200, headers: HeadersInit = {}) =>
   new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: { 'content-type': 'application/json', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', ...headers },
   });
 
 export const fail = (status: number, error: string) => json({ error }, status);

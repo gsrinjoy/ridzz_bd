@@ -10,6 +10,7 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         registerPlugin(RideShellPlugin.class);
+        registerPlugin(NearbyLinkPlugin.class);
         super.onCreate(savedInstanceState);
         handleShare(getIntent());
     }

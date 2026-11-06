@@ -76,6 +76,7 @@ export function createBackupEngine(container: HTMLElement, start: LatLng | null,
   map.on('touchcancel', pressEnd);
   map.on('touchmove', pressEnd);
   map.on('movestart', pressEnd);
+  map.on('dragstart', () => events.onUserPan());
   map.on('contextmenu', (e) => events.onLongPress({ la: e.lngLat.lat, lo: e.lngLat.lng }));
 
   return {

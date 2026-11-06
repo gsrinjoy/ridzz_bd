@@ -1,6 +1,7 @@
 import type { AppConfig } from '../shared/protocol';
 import { fail, json, type Env } from './env';
 import { adminRoutes } from './modules/admin/routes';
+import { authRoutes } from './modules/auth/routes';
 import { directoryRoutes } from './modules/directory/routes';
 import { placesRoutes } from './modules/places/routes';
 import { ridesRoutes } from './modules/rides/routes';
@@ -10,7 +11,7 @@ export { Directory } from './modules/directory/Directory';
 export { RideRoom } from './modules/rides/RideRoom';
 
 // Order matters: voice paths sit under /rides, so they are tried first.
-const modules = [adminRoutes, directoryRoutes, voiceRoutes, ridesRoutes, placesRoutes];
+const modules = [authRoutes, adminRoutes, directoryRoutes, voiceRoutes, ridesRoutes, placesRoutes];
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

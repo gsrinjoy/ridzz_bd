@@ -2,6 +2,8 @@ import { isValidLatLng } from '../../../shared/geo';
 import { MAPS_LINK_HOSTS, parseMapsLink } from '../../../shared/mapsLink';
 import type { PlaceHit, RouteResult } from '../../../shared/protocol';
 import { fail, json, type Env } from '../../env';
+import { currentUser } from '../auth/routes';
+import { googleSearch } from './google';
 
 const UA = { 'user-agent': 'Slipstream/0.1 (private group-ride app)' };
 const DAY = 'public, max-age=86400';
@@ -94,9 +96,13 @@ async function tileIndex(): Promise<Response> {
   return new Response(res.body, { headers: { 'content-type': 'application/json', 'cache-control': DAY } });
 }
 
-export async function placesRoutes(request: Request, _env: Env, path: string[]): Promise<Response | undefined> {
+export async function placesRoutes(request: Request, env: Env, path: string[]): Promise<Response | undefined> {
   const [, resource, action] = path;
   if (resource === 'map' && action === 'tiles.json') return tileIndex();
+  if (resource !== 'route' && resource !== 'places') return undefined;
+  // Riders only: these lean on free public services, whose limits must not be spent by strangers.
+  const user = await currentUser(request, env);
+  if (user instanceof Response) return user;
   const params = new URL(request.url).searchParams;
   if (resource === 'route') return route(params.get('coords') ?? '');
   if (resource !== 'places') return undefined;
@@ -105,7 +111,16 @@ export async function placesRoutes(request: Request, _env: Env, path: string[]):
     if (q.length < 2) return json([]);
     const lat = params.get('lat');
     const lon = params.get('lon');
-    return json(await geocode(q, lat && lon ? { lat, lon } : undefined), 200, { 'cache-control': DAY });
+    const near = lat && lon ? { lat, lon } : undefined;
+    if (env.GOOGLE_PLACES_KEY) {
+      try {
+        const point = near ? { la: Number(near.lat), lo: Number(near.lon) } : undefined;
+        return json(await googleSearch(q, point, env.GOOGLE_PLACES_KEY));
+      } catch {
+        // Out of quota or a bad key: free search is better than none.
+      }
+    }
+    return json(await geocode(q, near), 200, { 'cache-control': DAY });
   }
   if (action === 'resolve') return resolve(params.get('url') ?? '');
   return undefined;

@@ -50,6 +50,7 @@ export class VoiceEngine {
   private micSource: MediaStreamAudioSourceNode | undefined;
   private master: GainNode | undefined;
   private volumes: Record<string, number> = {};
+  private localTap: ((samples: Float32Array) => void) | undefined;
   private transport: VoiceTransport | undefined;
   private readonly remotes = new Map<string, RemoteAudio>();
 
@@ -107,8 +108,21 @@ export class VoiceEngine {
     await ctx.resume();
   }
 
+  /** Hands processed mic audio to the nearby link. Off unless that link is in use. */
+  setLocalTap(handler: ((samples: Float32Array) => void) | undefined): void {
+    this.localTap = handler;
+    this.command({ type: 'tap', on: !!handler });
+  }
+
+  /** Where audio from the nearby link is played. */
+  get localOutput(): { ctx: AudioContext; destination: AudioNode } | undefined {
+    return this.ctx && this.master ? { ctx: this.ctx, destination: this.master } : undefined;
+  }
+
   private onWorklet(e: WorkletEvent): void {
-    if (e.type === 'tx') {
+    if (e.type === 'pcm') {
+      this.localTap?.(e.samples);
+    } else if (e.type === 'tx') {
       this.transport?.setSending(e.on);
       this.host.onTransmit(e.on);
     } else {

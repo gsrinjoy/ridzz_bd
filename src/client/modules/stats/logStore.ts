@@ -30,6 +30,15 @@ export function restoreActive(id: string): RideLog | undefined {
   return log?.id === id ? log : undefined;
 }
 
+/**
+ * A rider can just close the app, and the checkpoint is then all that is left.
+ * Anything that is not the ride in progress gets filed here, not overwritten.
+ */
+export async function recoverActive(keepId?: string): Promise<void> {
+  const log = read<RideLog>(ACTIVE);
+  if (log && log.id !== keepId) await finishLog(log);
+}
+
 /** One upload per ride. Logs finished offline wait here for the next chance. */
 export async function finishLog(log: RideLog): Promise<void> {
   write(ACTIVE, null);

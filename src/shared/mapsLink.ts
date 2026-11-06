@@ -54,6 +54,12 @@ export function directionsUrl(to: LatLng): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${to.la},${to.lo}&travelmode=two-wheeler&dir_action=navigate`;
 }
 
+/** Opens real Google Maps search. Free and keyless, and it knows places free data does not. */
+export function googleSearchUrl(query: string, near?: LatLng | null): string {
+  const q = near ? `${query} near ${near.la.toFixed(3)},${near.lo.toFixed(3)}` : query;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`;
+}
+
 /** Google allows 3 waypoints on mobile browsers, so longer plans go leg by leg. */
 export function routeUrl(stops: LatLng[]): string | undefined {
   const last = stops[stops.length - 1];
